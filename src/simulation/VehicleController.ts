@@ -26,6 +26,15 @@ export class VehicleController {
     this.vehicleDefinition = definition;
   }
 
+  teleportLocal(x: number, z: number, rotation = this.state.rotation, speed = 0): VehicleState {
+    this.state.position.x = x;
+    this.state.position.z = z;
+    this.state.rotation = rotation;
+    this.state.speed = speed;
+    this.state.gearMode = Math.abs(speed) < 0.2 ? "neutral" : speed < 0 ? "reverse" : "drive";
+    return this.state;
+  }
+
   update(dt: number, input: InputActions): VehicleState {
     this.state.inputActions = input;
     const forward = input.accelerate ? 1 : 0;

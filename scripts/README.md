@@ -23,3 +23,14 @@ $env:SUPABASE_URL="https://your-project.supabase.co"; $env:SUPABASE_SERVICE_ROLE
 ```
 
 Default guards are intentionally conservative: `PLACES_IMPORT_QPS=1`, `PLACES_IMPORT_DAILY_REQUEST_LIMIT=300`, and `MAX_RESULTS_PER_DISTRICT_CATEGORY=60`.
+
+## 1:1 Road Tiles
+
+`npm run osm:import` now targets the central Bangkok 1:1 streaming map:
+
+1. Fetch Overpass road data for the prototype zones.
+2. Save raw responses in `public/data/road-chunks`.
+3. Convert roads to meter-scale `RoadTile` JSON files in `public/data/road-tiles`.
+4. Write `public/data/road-tiles/index.json` for `RoadTileStore`.
+
+The runtime still has bundled fallback road tiles, so the game can run without generated tile files.

@@ -19,16 +19,26 @@ function makeCanvasTexture(size: number, draw: (ctx: CanvasRenderingContext2D, s
 
 export function createAsphaltMaterial(highDetail: boolean): THREE.MeshStandardMaterial {
   const map = makeCanvasTexture(highDetail ? 256 : 128, (ctx, size) => {
-    ctx.fillStyle = "#252a2d";
+    ctx.fillStyle = "#343b3e";
     ctx.fillRect(0, 0, size, size);
-    for (let i = 0; i < size * 2; i += 1) {
-      const shade = 30 + ((i * 17) % 48);
-      ctx.fillStyle = `rgba(${shade}, ${shade + 3}, ${shade + 5}, 0.32)`;
+    for (let i = 0; i < size * (highDetail ? 3 : 2); i += 1) {
+      const shade = 44 + ((i * 17) % 58);
+      ctx.fillStyle = `rgba(${shade}, ${shade + 3}, ${shade + 5}, 0.28)`;
       ctx.fillRect((i * 37) % size, (i * 19) % size, 1 + (i % 3), 1 + ((i + 1) % 3));
     }
+    ctx.strokeStyle = "rgba(8, 11, 13, 0.18)";
+    ctx.lineWidth = highDetail ? 3 : 2;
+    for (let x = size * 0.28; x < size; x += size * 0.42) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.bezierCurveTo(x + size * 0.04, size * 0.28, x - size * 0.05, size * 0.7, x + size * 0.02, size);
+      ctx.stroke();
+    }
+    ctx.fillStyle = "rgba(255, 229, 150, 0.08)";
+    ctx.fillRect(0, size * 0.47, size, highDetail ? 2 : 1);
   });
   map.repeat.set(10, 1);
-  return new THREE.MeshStandardMaterial({ color: "#2c3134", map, roughness: 0.88, metalness: 0.02 });
+  return new THREE.MeshStandardMaterial({ color: "#424a4d", map, roughness: 0.8, metalness: 0.025 });
 }
 
 export function createSidewalkMaterial(): THREE.MeshStandardMaterial {
@@ -72,7 +82,6 @@ export function createBuildingMaterial(color: string, highDetail: boolean): THRE
   const map = makeCanvasTexture(highDetail ? 128 : 64, (ctx, size) => {
     ctx.fillStyle = color;
     ctx.fillRect(0, 0, size, size);
-    ctx.fillStyle = "rgba(195, 220, 230, 0.32)";
     const cols = 4;
     const rows = 8;
     const cellW = size / cols;
@@ -80,10 +89,13 @@ export function createBuildingMaterial(color: string, highDetail: boolean): THRE
     for (let y = 1; y < rows - 1; y += 1) {
       for (let x = 0; x < cols; x += 1) {
         if ((x + y) % 5 === 0) continue;
+        ctx.fillStyle = (x + y) % 3 === 0 ? "rgba(255, 230, 155, 0.34)" : "rgba(180, 220, 232, 0.3)";
         ctx.fillRect(x * cellW + cellW * 0.22, y * cellH + cellH * 0.22, cellW * 0.46, cellH * 0.34);
       }
     }
+    ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
+    ctx.fillRect(0, 0, size, highDetail ? 3 : 2);
   });
   map.repeat.set(1, 2);
-  return new THREE.MeshStandardMaterial({ color, map, roughness: 0.52, metalness: 0.08 });
+  return new THREE.MeshStandardMaterial({ color, map, roughness: 0.48, metalness: highDetail ? 0.14 : 0.08 });
 }

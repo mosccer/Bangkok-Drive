@@ -74,6 +74,24 @@ export interface PlaceListResponse {
   attribution: string[];
 }
 
+export type MapScaleMode = "condensed" | "real_1_1";
+
+export interface GeoPoint {
+  lat: number;
+  lng: number;
+}
+
+export interface WorldMeters {
+  x: number;
+  z: number;
+}
+
+export interface WorldAnchor {
+  geo: GeoPoint;
+  worldMeters: WorldMeters;
+  version: number;
+}
+
 export type MissionType = "tour_route" | "food_run" | "cafe_trail" | "time_trial" | "discovery";
 
 export interface Mission {
@@ -116,6 +134,15 @@ export type GraphicsQuality = "low" | "medium" | "high";
 
 export type OrientationMode = "portrait" | "landscape";
 
+export type VisualMood = "day_festival" | "neon_night" | "boost_arcade";
+
+export interface ArcadeVisualSettings {
+  visualMood: VisualMood;
+  cameraShake: boolean;
+  speedEffects: boolean;
+  reduceMotion: boolean;
+}
+
 export interface RenderQualityProfile {
   quality: GraphicsQuality;
   pixelRatioCap: number;
@@ -124,6 +151,26 @@ export interface RenderQualityProfile {
   drawDistance: number;
   usePostEffects: boolean;
   useHighDetailMaterials: boolean;
+  useSpeedEffects: boolean;
+  useBoostTrails: boolean;
+  useSkidMarks: boolean;
+  useEnhancedMaterials: boolean;
+}
+
+export interface VehicleVisualState {
+  speedKmh: number;
+  speedIntensity: number;
+  boostIntensity: number;
+  brakeIntensity: number;
+  skidIntensity: number;
+  wheelSpinDelta: number;
+}
+
+export interface SpeedEffectState {
+  fov: number;
+  shake: number;
+  streakOpacity: number;
+  boostGlow: number;
 }
 
 export interface VehicleState {
@@ -194,6 +241,10 @@ export interface GhostPlayerState {
   chunkId: string;
   x: number;
   z: number;
+  lat?: number;
+  lng?: number;
+  tileId?: string;
+  originVersion?: number;
   yaw: number;
   speed: number;
   updatedAt: number;
@@ -213,6 +264,10 @@ export interface SaveGame {
   completedMissionIds: string[];
   settings: {
     graphicsQuality: GraphicsQuality;
+    mapScaleMode: MapScaleMode;
+    visualMood: VisualMood;
+    cameraShake: boolean;
+    speedEffects: boolean;
     reduceMotion: boolean;
     units: "metric";
   };
@@ -230,7 +285,7 @@ export interface RoadSegment {
   to: string;
   width: number;
   district: string;
-  kind: "arterial" | "street" | "bridge" | "alley";
+  kind: "motorway" | "primary" | "secondary" | "tertiary" | "residential" | "service" | "arterial" | "street" | "bridge" | "alley";
 }
 
 export interface Landmark {
@@ -248,6 +303,48 @@ export interface RoadChunk {
   segments: RoadSegment[];
   district: string;
   landmarks: Landmark[];
+}
+
+export interface RoadTile {
+  id: string;
+  boundsLatLng: { south: number; west: number; north: number; east: number };
+  boundsMeters: { minX: number; maxX: number; minZ: number; maxZ: number };
+  originMeters: WorldMeters;
+  nodes: RoadNode[];
+  segments: RoadSegment[];
+  districtIds: string[];
+  loadedAt: number;
+}
+
+export interface RoadTileManifestEntry {
+  id: string;
+  href: string;
+  boundsLatLng: RoadTile["boundsLatLng"];
+  boundsMeters: RoadTile["boundsMeters"];
+  districtIds: string[];
+}
+
+export interface RoadTileManifest {
+  scaleMode: "real_1_1";
+  tileSizeMeters: number;
+  generatedAt: string;
+  tiles: RoadTileManifestEntry[];
+}
+
+export interface StreamingMapState {
+  scaleMode: MapScaleMode;
+  anchor: WorldAnchor;
+  activeTileId?: string;
+  visibleTileIds: string[];
+  loadedTiles: RoadTile[];
+  tileSizeMeters: number;
+}
+
+export interface FastTravelPoint {
+  id: string;
+  label: string;
+  target: GeoPoint;
+  distanceMeters: number;
 }
 
 export interface BangkokWorldData {

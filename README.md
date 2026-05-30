@@ -31,6 +31,7 @@ Open `http://localhost:5173`.
 - Discovery XP, mission rewards, local save, and cloud-save-ready data shapes
 - DOM HUD, minimap, POI drawer, garage drawer, mobile controls
 - Hybrid Bangkok Places: curated real guide entries plus Google Places-ready directory/cache
+- Bangkok 1:1 Streaming Map prototype with meter-scale road tiles and floating origin
 - Supabase-ready guest auth, cloud save, leaderboard, and ghost car presence service
 
 ## Google Places Integration
@@ -48,6 +49,18 @@ Runtime query shape:
 ```
 
 The HUD filters POIs by district/category without changing mission routes. The renderer caps visible markers near the player so mobile stays readable.
+
+## Bangkok 1:1 Streaming Map
+
+The current prototype defaults to `real_1_1` map scale:
+
+- `1 world unit = 1 meter`
+- Vehicle physics/rendering use local coordinates around a floating origin.
+- POIs and mission waypoints use real `lat/lng`.
+- Road tiles stream around the player from bundled fallback tiles first; OSM import can replace them with Overpass-derived data.
+- Fast travel appears for waypoints farther than 2.5 km so real distance does not make mobile sessions drag.
+
+The condensed map code remains as a fallback/dev reference while the 1:1 tile pipeline matures.
 
 Run the optional local proxy:
 
@@ -84,6 +97,7 @@ Add these environment variables locally and in Vercel:
 $env:VITE_SUPABASE_URL="https://your-project.supabase.co"
 $env:VITE_SUPABASE_PUBLISHABLE_KEY="your-publishable-key"
 $env:GOOGLE_PLACES_API_KEY="your-google-key"
+$env:VITE_PLACES_API_BASE="/api"
 ```
 
 Realtime ghost cars use Supabase Presence and are intentionally non-colliding. The client tracks a small position packet per chunk at a low rate so driving remains stable on mobile.
@@ -96,4 +110,4 @@ Prototype chunks live in `src/data/roadChunks.ts`. To fetch raw Overpass exports
 npm run osm:import
 ```
 
-The script writes raw exports to `public/data/road-chunks/*.overpass.json`; convert them through `convertOverpassToRoadChunk` before shipping.
+The script writes raw exports to `public/data/road-chunks/*.overpass.json` and 1:1 streaming tiles to `public/data/road-tiles/*.json` plus `public/data/road-tiles/index.json`. If Overpass is unavailable, the app uses bundled fallback road tiles for the central Bangkok prototype zones.

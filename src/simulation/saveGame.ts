@@ -21,6 +21,10 @@ export const defaultSaveGame: SaveGame = {
   completedMissionIds: [],
   settings: {
     graphicsQuality: "medium",
+    mapScaleMode: "real_1_1",
+    visualMood: "day_festival",
+    cameraShake: true,
+    speedEffects: true,
     reduceMotion: false,
     units: "metric",
   },

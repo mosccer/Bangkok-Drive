@@ -12,6 +12,7 @@ export class Hud {
   private readonly drawer: HTMLElement;
   private readonly drawerBody: HTMLElement;
   private readonly stats: HTMLElement;
+  private readonly fastTravelButton: HTMLButtonElement;
   private readonly categorySelect: HTMLSelectElement;
   private readonly districtSelect: HTMLSelectElement;
   private readonly garagePanel: HTMLElement;
@@ -29,6 +30,7 @@ export class Hud {
       <canvas class="minimap" width="180" height="180" data-ui="minimap"></canvas>
       <div class="speedometer"><strong data-ui="speed">0</strong><span>km/h</span></div>
       <div class="stats-strip" data-ui="stats">XP 0 | Bangkok guide cache ready</div>
+      <button class="fast-travel-button hidden" data-ui="fast-travel">Fast travel</button>
       <div class="place-toolbar">
         <select data-ui="category-filter" aria-label="Place category">
           <option value="">All</option>
@@ -86,6 +88,7 @@ export class Hud {
     this.drawer = this.mustFind("[data-ui='drawer']");
     this.drawerBody = this.mustFind("[data-ui='drawer-body']");
     this.stats = this.mustFind("[data-ui='stats']");
+    this.fastTravelButton = this.mustFind<HTMLButtonElement>("[data-ui='fast-travel']");
     this.categorySelect = this.mustFind<HTMLSelectElement>("[data-ui='category-filter']");
     this.districtSelect = this.mustFind<HTMLSelectElement>("[data-ui='district-filter']");
     this.garagePanel = this.mustFind("[data-ui='garage-panel']");
@@ -136,6 +139,17 @@ export class Hud {
       this.poiPrompt.classList.add("hidden");
       this.poiPrompt.onclick = null;
     }
+  }
+
+  updateFastTravel(target: { label: string; distanceMeters: number } | undefined, onFastTravel: (() => void) | undefined): void {
+    if (!target || !onFastTravel) {
+      this.fastTravelButton.classList.add("hidden");
+      this.fastTravelButton.onclick = null;
+      return;
+    }
+    this.fastTravelButton.classList.remove("hidden");
+    this.fastTravelButton.textContent = `Jump ${Math.round(target.distanceMeters / 100) / 10} km to ${target.label}`;
+    this.fastTravelButton.onclick = onFastTravel;
   }
 
   drawMinimap(

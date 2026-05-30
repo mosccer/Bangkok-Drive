@@ -32,6 +32,25 @@ a {
   position: fixed;
   inset: 0;
   overflow: hidden;
+  --speed-layer-opacity: 0;
+  --speed-streak-opacity: 0;
+  --boost-glow-opacity: 0;
+}
+
+.canvas-host::before {
+  content: "";
+  position: absolute;
+  inset: -8%;
+  z-index: 1;
+  pointer-events: none;
+  opacity: var(--speed-layer-opacity);
+  background:
+    radial-gradient(ellipse at 50% 92%, rgba(103, 232, 249, calc(var(--boost-glow-opacity) * 0.42)), transparent 42%),
+    linear-gradient(90deg, rgba(255, 255, 255, calc(var(--speed-streak-opacity) * 0.22)), transparent 18%, transparent 82%, rgba(255, 255, 255, calc(var(--speed-streak-opacity) * 0.22))),
+    repeating-linear-gradient(100deg, transparent 0 30px, rgba(255, 255, 255, calc(var(--speed-streak-opacity) * 0.18)) 31px 33px, transparent 34px 74px);
+  mix-blend-mode: screen;
+  transition: opacity 100ms ease;
+  mask-image: radial-gradient(ellipse at center, transparent 0 30%, #000 70%);
 }
 
 .canvas-host::after {
@@ -47,6 +66,12 @@ a {
   transition: opacity 160ms ease;
 }
 
+.canvas-host[data-mood="day_festival"]::after {
+  background:
+    radial-gradient(circle at 50% 42%, transparent 0%, transparent 58%, rgba(2, 6, 12, 0.24) 100%),
+    linear-gradient(180deg, rgba(255, 232, 178, 0.1), rgba(56, 142, 167, 0.07));
+}
+
 .canvas-host[data-postfx="true"]::after {
   opacity: 1;
 }
@@ -54,6 +79,11 @@ a {
 .canvas-host[data-quality="high"] canvas,
 .canvas-host[data-quality="medium"] canvas {
   filter: saturate(1.08) contrast(1.05);
+}
+
+.canvas-host[data-quality="high"][data-speed="fast"] canvas,
+.canvas-host[data-quality="medium"][data-speed="fast"] canvas {
+  filter: saturate(1.16) contrast(1.08);
 }
 
 .canvas-host canvas {
@@ -77,6 +107,7 @@ a {
 .poi-drawer,
 .garage-button,
 .place-toolbar,
+.fast-travel-button,
 .garage-panel,
 .rotate-hint,
 .icon-button,
@@ -202,6 +233,23 @@ a {
   background: var(--panel);
   font-size: 12px;
   color: #d8f3ff;
+}
+
+.fast-travel-button {
+  position: absolute;
+  left: 50%;
+  top: max(56px, calc(env(safe-area-inset-top) + 56px));
+  transform: translateX(-50%);
+  max-width: min(340px, calc(100vw - 36px));
+  height: 36px;
+  border: 1px solid rgba(103, 232, 249, 0.4);
+  border-radius: 8px;
+  background: rgba(11, 42, 56, 0.82);
+  color: #e0fbff;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 0 12px;
+  cursor: pointer;
 }
 
 .rotate-hint {
@@ -494,6 +542,13 @@ body.paused::after {
     bottom: 156px;
     width: 92px;
     height: 62px;
+  }
+
+  .fast-travel-button {
+    top: auto;
+    bottom: 96px;
+    max-width: min(260px, calc(100vw - 230px));
+    height: 34px;
   }
 
   .speedometer strong {
