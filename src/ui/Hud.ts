@@ -4,6 +4,25 @@ import { placeDisplayName } from "../simulation/placeQueries";
 import { mpsToKmh } from "../simulation/speed";
 import type { Mission, PlaceCategory, PlaceDetail, PlaceQuery, PlaceSummary, SaveGame, VehicleDefinition, VehicleState } from "../types";
 
+const MINIMAP_WORLD_SCALE = 0.12;
+
+export function minimapWorldToScreen(
+  vehicle: Pick<VehicleState, "position" | "rotation">,
+  world: { x: number; z: number },
+  width: number,
+  height: number,
+  scale = MINIMAP_WORLD_SCALE,
+): { x: number; y: number } {
+  const dx = world.x - vehicle.position.x;
+  const dz = world.z - vehicle.position.z;
+  const forward = dx * Math.sin(vehicle.rotation) + dz * Math.cos(vehicle.rotation);
+  const right = dx * Math.cos(vehicle.rotation) - dz * Math.sin(vehicle.rotation);
+  return {
+    x: width / 2 + right * scale,
+    y: height / 2 - forward * scale,
+  };
+}
+
 export class Hud {
   readonly root: HTMLDivElement;
   private readonly speed: HTMLElement;
@@ -38,7 +57,7 @@ export class Hud {
       </div>
       <button class="icon-button pause-button" data-control="pause" aria-label="Pause">II</button>
       <button class="garage-button" data-ui="garage-button">Garage</button>
-      <canvas class="minimap" width="180" height="180" data-ui="minimap"></canvas>
+      <canvas class="minimap" width="360" height="360" data-ui="minimap"></canvas>
       <div class="speedometer"><strong data-ui="speed">0</strong><span>km/h</span></div>
       <div class="stats-strip" data-ui="stats">XP 0 | Bangkok guide cache ready</div>
       <button class="fast-travel-button hidden" data-ui="fast-travel">Fast travel</button>
@@ -272,9 +291,7 @@ export class Hud {
     ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
 
     for (const place of places) {
-      const pos = worldPosition(place);
-      const x = width / 2 + (pos.x - vehicle.position.x) * 0.12;
-      const y = height / 2 + (pos.z - vehicle.position.z) * 0.12;
+      const { x, y } = minimapWorldToScreen(vehicle, worldPosition(place), width, height);
       if (x < 4 || x > width - 4 || y < 4 || y > height - 4) continue;
       ctx.fillStyle = this.placeColor(place.category);
       ctx.beginPath();
@@ -283,9 +300,7 @@ export class Hud {
     }
 
     if (target) {
-      const pos = worldPosition(target);
-      const x = width / 2 + (pos.x - vehicle.position.x) * 0.12;
-      const y = height / 2 + (pos.z - vehicle.position.z) * 0.12;
+      const { x, y } = minimapWorldToScreen(vehicle, worldPosition(target), width, height);
       ctx.strokeStyle = "#67e8f9";
       ctx.lineWidth = 2;
       ctx.beginPath();

@@ -15,6 +15,13 @@ describe("place filtering", () => {
     expect(food.map((place) => place.id)).toEqual(expect.arrayContaining(["yaowarat-food-street", "siam-paragon"]));
   });
 
+  it("treats the tour category as all tagged tour spots", () => {
+    const tour = queryPlaces(bangkokWorld.places, { category: "tourist_attraction", limit: 150 });
+    expect(tour.places.map((place) => place.id)).toEqual(
+      expect.arrayContaining(["grand-palace", "wat-phra-kaew", "wat-pho", "yaowarat-food-street", "chatuchak-market"]),
+    );
+  });
+
   it("queries by district, category, cursor, and limit", () => {
     const page = queryPlaces(bangkokWorld.places, { districtId: "phra-nakhon", category: "temple", limit: 1 });
     expect(page.places).toHaveLength(1);

@@ -54,13 +54,19 @@ export function distanceMeters(a, b) {
   return 2 * earthRadiusMeters * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
+export function matchesPlaceCategory(place, category) {
+  if (!category) return true;
+  if (place.category === category) return true;
+  return category === "tourist_attraction" && place.tags?.includes("tour");
+}
+
 export function queryPlaces(places, query = {}, source = "static") {
   const limit = Math.max(1, Math.min(Number(query.limit ?? DEFAULT_LIMIT), MAX_LIMIT));
   const offset = Number(query.cursor ?? 0);
   const near = Number.isFinite(query.nearLat) && Number.isFinite(query.nearLng) ? { lat: query.nearLat, lng: query.nearLng } : undefined;
 
   const filtered = dedupePlaces(places)
-    .filter((place) => !query.category || place.category === query.category)
+    .filter((place) => matchesPlaceCategory(place, query.category))
     .filter((place) => !query.districtId || place.districtId === query.districtId)
     .filter((place) => !query.tag || place.tags?.includes(query.tag))
     .filter((place) => {

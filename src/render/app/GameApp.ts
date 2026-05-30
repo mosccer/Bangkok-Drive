@@ -15,6 +15,7 @@ import { activeWaypoint, advanceMissionAtWaypoint, ensureMissionProgress } from 
 import { createStarterMissions } from "../../simulation/missions";
 import { createFastTravelPoint, shouldOfferFastTravel } from "../../simulation/fastTravel";
 import { loadSave, mergeCloudSave, saveGame } from "../../simulation/saveGame";
+import { matchesPlaceCategory } from "../../simulation/placeQueries";
 import { VehicleController } from "../../simulation/VehicleController";
 import { pruneStaleGhosts } from "../../simulation/ghosts";
 import { createOnlineService, type OnlineService } from "../../services/onlineService";
@@ -279,7 +280,7 @@ export class GameApp {
     const maxMarkers = isMobile ? 40 : 80;
     const radiusMeters = isMobile ? 900 : 1_600;
     this.visiblePlaces = this.places
-      .filter((place) => !this.placeQuery.category || place.category === this.placeQuery.category)
+      .filter((place) => matchesPlaceCategory(place, this.placeQuery.category))
       .filter((place) => !this.placeQuery.districtId || place.districtId === this.placeQuery.districtId)
       .map((place) => {
         const local = geoToLocal(place, this.worldAnchor);

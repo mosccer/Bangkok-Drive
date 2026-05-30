@@ -1,12 +1,18 @@
 import type { PlaceCategory, PlaceListResponse, PlaceQuery, PlaceSummary, VehicleState } from "../types";
 import { placeWorldPosition } from "../data/bangkokWorld";
 
+export function matchesPlaceCategory(place: PlaceSummary, category?: PlaceCategory): boolean {
+  if (!category) return true;
+  if (place.category === category) return true;
+  return category === "tourist_attraction" && place.tags.includes("tour");
+}
+
 export function filterPlaces(
   places: PlaceSummary[],
   options: { category?: PlaceCategory; district?: string; minRating?: number; tag?: string },
 ): PlaceSummary[] {
   return places.filter((place) => {
-    if (options.category && place.category !== options.category) return false;
+    if (!matchesPlaceCategory(place, options.category)) return false;
     if (options.district && place.district !== options.district) return false;
     if (options.minRating && (place.rating ?? 0) < options.minRating) return false;
     if (options.tag && !place.tags.includes(options.tag)) return false;
@@ -65,7 +71,7 @@ export function queryPlaces(places: PlaceSummary[], query: PlaceQuery = {}): Pla
       : undefined;
 
   const filtered = dedupePlaces(places)
-    .filter((place) => !query.category || place.category === query.category)
+    .filter((place) => matchesPlaceCategory(place, query.category))
     .filter((place) => !query.districtId || place.districtId === query.districtId)
     .filter((place) => !query.tag || place.tags.includes(query.tag))
     .filter((place) => {
@@ -96,7 +102,7 @@ export function visiblePlacesNearVehicle(
   options: { maxMarkers: number; radiusWorldUnits: number; category?: PlaceCategory; districtId?: string },
 ): PlaceSummary[] {
   return places
-    .filter((place) => !options.category || place.category === options.category)
+    .filter((place) => matchesPlaceCategory(place, options.category))
     .filter((place) => !options.districtId || place.districtId === options.districtId)
     .map((place) => {
       const pos = placeWorldPosition(place);
