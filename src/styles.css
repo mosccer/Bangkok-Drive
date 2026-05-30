@@ -1,0 +1,535 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #f8fafc;
+  background: #101319;
+  --panel: rgba(13, 18, 25, 0.78);
+  --line: rgba(255, 255, 255, 0.16);
+  --accent: #f8d95a;
+  --cyan: #67e8f9;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  touch-action: none;
+}
+
+button,
+a {
+  font: inherit;
+}
+
+.game-shell,
+.canvas-host {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+
+.canvas-host::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background:
+    radial-gradient(circle at 50% 42%, transparent 0%, transparent 55%, rgba(2, 6, 12, 0.28) 100%),
+    linear-gradient(180deg, rgba(255, 228, 163, 0.08), rgba(42, 127, 163, 0.06));
+  mix-blend-mode: multiply;
+  transition: opacity 160ms ease;
+}
+
+.canvas-host[data-postfx="true"]::after {
+  opacity: 1;
+}
+
+.canvas-host[data-quality="high"] canvas,
+.canvas-host[data-quality="medium"] canvas {
+  filter: saturate(1.08) contrast(1.05);
+}
+
+.canvas-host canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.hud {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+}
+
+.objective-chip,
+.stats-strip,
+.speedometer,
+.minimap,
+.poi-prompt,
+.poi-drawer,
+.garage-button,
+.garage-panel,
+.rotate-hint,
+.icon-button,
+.mobile-controls button {
+  pointer-events: auto;
+}
+
+.objective-chip {
+  position: absolute;
+  left: max(18px, env(safe-area-inset-left));
+  top: max(16px, env(safe-area-inset-top));
+  max-width: min(460px, calc(100vw - 220px));
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  backdrop-filter: blur(12px);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.pause-button {
+  position: absolute;
+  left: max(18px, env(safe-area-inset-left));
+  top: 64px;
+}
+
+.garage-button {
+  position: absolute;
+  left: max(64px, calc(env(safe-area-inset-left) + 64px));
+  top: 64px;
+  height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: #fff;
+  font-weight: 800;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.icon-button {
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: #fff;
+  cursor: pointer;
+}
+
+.minimap {
+  position: absolute;
+  right: max(18px, env(safe-area-inset-right));
+  top: max(16px, env(safe-area-inset-top));
+  width: 180px;
+  height: 180px;
+  border-radius: 8px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.35);
+}
+
+.speedometer {
+  position: absolute;
+  right: max(24px, env(safe-area-inset-right));
+  bottom: max(22px, env(safe-area-inset-bottom));
+  width: 126px;
+  height: 82px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(11, 14, 18, 0.72);
+  display: grid;
+  place-items: center;
+  align-content: center;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.34);
+}
+
+.speedometer strong {
+  display: block;
+  font-size: 34px;
+  line-height: 1;
+}
+
+.speedometer span {
+  display: block;
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.stats-strip {
+  position: absolute;
+  left: 50%;
+  bottom: max(20px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  padding: 9px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 12px;
+  color: #d8f3ff;
+}
+
+.rotate-hint {
+  position: absolute;
+  left: 50%;
+  top: max(16px, env(safe-area-inset-top));
+  transform: translateX(-50%);
+  display: none;
+  padding: 8px 12px;
+  border: 1px solid rgba(103, 232, 249, 0.34);
+  border-radius: 8px;
+  background: rgba(11, 14, 18, 0.72);
+  color: #d8f3ff;
+  font-size: 12px;
+  font-weight: 800;
+  pointer-events: none;
+}
+
+.poi-prompt {
+  position: absolute;
+  left: 50%;
+  top: 74%;
+  transform: translateX(-50%);
+  min-width: 180px;
+  border: 1px solid rgba(248, 217, 90, 0.5);
+  border-radius: 8px;
+  background: rgba(24, 22, 12, 0.86);
+  color: #fff7cc;
+  padding: 12px 16px;
+  cursor: pointer;
+}
+
+.hidden {
+  display: none;
+}
+
+.poi-drawer {
+  position: absolute;
+  right: 18px;
+  top: 214px;
+  width: min(360px, calc(100vw - 36px));
+  max-height: calc(100vh - 250px);
+  overflow: auto;
+  transform: translateX(calc(100% + 28px));
+  transition: transform 180ms ease;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(11, 14, 18, 0.9);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.44);
+}
+
+.poi-drawer.open {
+  transform: translateX(0);
+}
+
+.garage-panel {
+  position: absolute;
+  left: 18px;
+  top: 112px;
+  width: min(360px, calc(100vw - 36px));
+  max-height: calc(100vh - 150px);
+  overflow: auto;
+  transform: translateX(calc(-100% - 28px));
+  transition: transform 180ms ease;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(11, 14, 18, 0.9);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.44);
+}
+
+.garage-panel.open {
+  transform: translateX(0);
+}
+
+.garage-body {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.garage-card {
+  display: grid;
+  grid-template-columns: 30px 1fr;
+  gap: 3px 10px;
+  align-items: center;
+  text-align: left;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #f8fafc;
+  padding: 10px;
+  cursor: pointer;
+}
+
+.garage-card.selected {
+  border-color: var(--cyan);
+}
+
+.garage-card:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.garage-card small,
+.garage-card span:last-child {
+  grid-column: 2;
+  color: #cbd5e1;
+}
+
+.garage-swatch {
+  grid-row: span 3;
+  width: 24px;
+  height: 46px;
+  border-radius: 6px;
+  background: var(--car-color);
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.drawer-body {
+  padding: 14px;
+}
+
+.drawer-body h2 {
+  margin: 0 0 10px;
+  font-size: 22px;
+}
+
+.drawer-body p {
+  color: #d5dde7;
+  line-height: 1.45;
+}
+
+.drawer-body dl {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 8px 12px;
+  margin: 14px 0;
+}
+
+.drawer-body dt {
+  color: #93a4b8;
+}
+
+.drawer-body dd {
+  margin: 0;
+}
+
+.drawer-link {
+  display: inline-flex;
+  color: #101319;
+  background: var(--accent);
+  text-decoration: none;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-weight: 800;
+}
+
+.mobile-controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: max(18px, env(safe-area-inset-bottom));
+  display: none;
+  justify-content: space-between;
+  align-items: end;
+  padding: 0 18px;
+  pointer-events: none;
+}
+
+.touch-stick {
+  pointer-events: auto;
+  width: 118px;
+  height: 118px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 50%;
+  background: rgba(11, 14, 18, 0.46);
+  display: grid;
+  place-items: center;
+}
+
+.touch-stick span {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.36);
+}
+
+.pedals {
+  pointer-events: auto;
+  display: grid;
+  grid-template-columns: repeat(2, 64px);
+  gap: 10px;
+}
+
+.pedals button {
+  height: 58px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 8px;
+  background: rgba(11, 14, 18, 0.68);
+  color: #fff;
+  font-weight: 900;
+}
+
+.pedals [data-control="throttle"] {
+  height: 126px;
+  grid-row: span 2;
+  background: rgba(28, 113, 71, 0.82);
+}
+
+body.paused::after {
+  content: "PAUSED";
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.22);
+  font-size: 42px;
+  font-weight: 900;
+  letter-spacing: 0;
+  pointer-events: none;
+}
+
+@media (max-width: 760px), (pointer: coarse) {
+  .mobile-controls {
+    display: flex;
+  }
+
+  .objective-chip {
+    max-width: calc(100vw - 132px);
+    font-size: 12px;
+    padding: 9px 10px;
+  }
+
+  .minimap {
+    width: 104px;
+    height: 104px;
+  }
+
+  .poi-drawer {
+    top: auto;
+    right: 10px;
+    left: 10px;
+    bottom: 150px;
+    width: auto;
+    max-height: 42vh;
+  }
+
+  .garage-panel {
+    top: 112px;
+    left: 10px;
+    width: min(330px, calc(100vw - 20px));
+    max-height: 46vh;
+  }
+
+  .speedometer {
+    right: 18px;
+    bottom: 156px;
+    width: 92px;
+    height: 62px;
+  }
+
+  .speedometer strong {
+    font-size: 25px;
+  }
+
+  .stats-strip {
+    display: none;
+  }
+}
+
+@media (pointer: coarse) and (orientation: landscape), (max-height: 520px) and (orientation: landscape) {
+  .objective-chip {
+    max-width: min(330px, calc(100vw - 300px));
+    top: max(10px, env(safe-area-inset-top));
+    left: max(12px, env(safe-area-inset-left));
+    padding: 8px 10px;
+  }
+
+  .pause-button {
+    top: 54px;
+    left: max(12px, env(safe-area-inset-left));
+  }
+
+  .garage-button {
+    top: 54px;
+    left: max(58px, calc(env(safe-area-inset-left) + 58px));
+  }
+
+  .minimap {
+    width: 118px;
+    height: 118px;
+    right: max(12px, env(safe-area-inset-right));
+    top: max(10px, env(safe-area-inset-top));
+  }
+
+  .speedometer {
+    right: max(18px, env(safe-area-inset-right));
+    bottom: max(136px, calc(env(safe-area-inset-bottom) + 136px));
+    width: 94px;
+    height: 62px;
+  }
+
+  .mobile-controls {
+    display: flex;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    padding: 0 14px;
+  }
+
+  .touch-stick {
+    width: 104px;
+    height: 104px;
+  }
+
+  .pedals {
+    grid-template-columns: repeat(2, 58px);
+  }
+
+  .pedals button {
+    height: 50px;
+  }
+
+  .pedals [data-control="throttle"] {
+    height: 110px;
+  }
+
+  .rotate-hint {
+    display: none;
+  }
+}
+
+@media (pointer: coarse) and (orientation: portrait), (max-width: 760px) and (orientation: portrait) {
+  .rotate-hint {
+    display: block;
+  }
+
+  .objective-chip {
+    top: 52px;
+  }
+
+  .pause-button,
+  .garage-button {
+    top: 100px;
+  }
+
+  .minimap {
+    top: 52px;
+  }
+}

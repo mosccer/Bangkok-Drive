@@ -1,1 +1,13 @@
-.vercel
+.vercel/
+node_modules/
+dist/
+output/
+
+.env
+.env.*
+!.env.example
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

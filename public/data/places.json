@@ -1,0 +1,98 @@
+[
+  {
+    "id": "wat-phra-kaew",
+    "googlePlaceId": "mock-wat-phra-kaew",
+    "name": "Wat Phra Kaew",
+    "category": "temple",
+    "lat": 13.7515,
+    "lng": 100.4929,
+    "district": "Phra Nakhon",
+    "rating": 4.7,
+    "userRatingCount": 12000,
+    "tags": ["landmark", "temple", "tour"]
+  },
+  {
+    "id": "grand-palace",
+    "googlePlaceId": "mock-grand-palace",
+    "name": "Grand Palace",
+    "category": "tourist_attraction",
+    "lat": 13.75,
+    "lng": 100.4913,
+    "district": "Phra Nakhon",
+    "rating": 4.5,
+    "userRatingCount": 18000,
+    "tags": ["landmark", "history", "tour"]
+  },
+  {
+    "id": "yaowarat-food-street",
+    "googlePlaceId": "mock-yaowarat-food-street",
+    "name": "Yaowarat Food Street",
+    "category": "restaurant",
+    "lat": 13.74,
+    "lng": 100.5088,
+    "district": "Samphanthawong",
+    "rating": 4.6,
+    "userRatingCount": 9000,
+    "tags": ["street-food", "night", "food"]
+  },
+  {
+    "id": "siam-paragon",
+    "googlePlaceId": "mock-siam-paragon",
+    "name": "Siam Paragon",
+    "category": "shopping_mall",
+    "lat": 13.7466,
+    "lng": 100.5347,
+    "district": "Pathum Wan",
+    "rating": 4.6,
+    "userRatingCount": 21000,
+    "tags": ["shopping", "food", "transit"]
+  },
+  {
+    "id": "lumphini-park",
+    "googlePlaceId": "mock-lumphini-park",
+    "name": "Lumphini Park",
+    "category": "park",
+    "lat": 13.7308,
+    "lng": 100.5418,
+    "district": "Pathum Wan",
+    "rating": 4.5,
+    "userRatingCount": 11000,
+    "tags": ["park", "morning", "tour"]
+  },
+  {
+    "id": "ari-cafe-zone",
+    "googlePlaceId": "mock-ari-cafe-zone",
+    "name": "Ari Cafe Zone",
+    "category": "cafe",
+    "lat": 13.7802,
+    "lng": 100.544,
+    "district": "Phaya Thai",
+    "rating": 4.4,
+    "userRatingCount": 4200,
+    "tags": ["cafe", "brunch", "trail"]
+  },
+  {
+    "id": "chatuchak-market",
+    "googlePlaceId": "mock-chatuchak-market",
+    "name": "Chatuchak Weekend Market",
+    "category": "tourist_attraction",
+    "lat": 13.7998,
+    "lng": 100.55,
+    "district": "Chatuchak",
+    "rating": 4.4,
+    "userRatingCount": 16000,
+    "tags": ["market", "shopping", "food"]
+  },
+  {
+    "id": "iconsiam",
+    "googlePlaceId": "mock-iconsiam",
+    "name": "ICONSIAM",
+    "category": "shopping_mall",
+    "lat": 13.7266,
+    "lng": 100.5102,
+    "district": "Khlong San",
+    "rating": 4.6,
+    "userRatingCount": 17000,
+    "tags": ["river", "shopping", "food"]
+  }
+]
