@@ -8,6 +8,8 @@ describe("mission generation", () => {
     expect(missions.map((mission) => mission.type)).toEqual(
       expect.arrayContaining(["tour_route", "food_run", "cafe_trail", "time_trial", "discovery"]),
     );
+    expect(missions.every((mission) => mission.waypoints.length > 0)).toBe(true);
+    expect(missions.flatMap((mission) => mission.waypoints).every((id) => bangkokWorld.places.some((place) => place.id === id))).toBe(true);
   });
 
   it("respects completed mission unlock requirements", () => {

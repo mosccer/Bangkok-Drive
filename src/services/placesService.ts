@@ -1,32 +1,22 @@
-import type { PlaceDetail, PlaceSummary } from "../types";
+import type { PlaceDetail, PlaceListResponse, PlaceQuery, PlaceSummary } from "../types";
+import { queryPlaces } from "../simulation/placeQueries";
+import { createCachedPlaceDetail } from "./placeNormalization";
 
 export interface PlacesService {
-  listSummaries(): Promise<PlaceSummary[]>;
-  getDetail(placeId: string): Promise<PlaceDetail | undefined>;
+  listSummaries(query?: PlaceQuery): Promise<PlaceListResponse>;
+  getDetail(placeId: string, lang?: "th" | "en"): Promise<PlaceDetail | undefined>;
 }
 
 export class CachedPlacesService implements PlacesService {
   constructor(private readonly places: PlaceSummary[]) {}
 
-  async listSummaries(): Promise<PlaceSummary[]> {
-    return this.places;
+  async listSummaries(query: PlaceQuery = {}): Promise<PlaceListResponse> {
+    return queryPlaces(this.places, query);
   }
 
-  async getDetail(placeId: string): Promise<PlaceDetail | undefined> {
+  async getDetail(placeId: string, lang: "th" | "en" = "th"): Promise<PlaceDetail | undefined> {
     const place = this.places.find((candidate) => candidate.id === placeId || candidate.googlePlaceId === placeId);
-    if (!place) {
-      return undefined;
-    }
-
-    return {
-      ...place,
-      openingHours: ["Google Places details can populate live opening hours when an API key is configured."],
-      photos: [],
-      websiteUri: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}`,
-      googleMapsUri: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.name)}`,
-      description:
-        "ครอบคลุมพื้นที่กรุงเทพจาก Google Places ตามหมวดที่รองรับ ข้อมูลตัวอย่างนี้ใช้ได้แม้ยังไม่ได้ตั้งค่า API key",
-    };
+    return place ? createCachedPlaceDetail(place, lang) : undefined;
   }
 }
 
@@ -36,23 +26,29 @@ export class GooglePlacesProxyService implements PlacesService {
     private readonly fallback: PlacesService,
   ) {}
 
-  async listSummaries(): Promise<PlaceSummary[]> {
+  async listSummaries(query: PlaceQuery = {}): Promise<PlaceListResponse> {
     try {
-      const response = await fetch(`${this.endpoint}/places`);
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(query)) {
+        if (value !== undefined) params.set(key, String(value));
+      }
+
+      const response = await fetch(`${this.endpoint}/places${params.size ? `?${params.toString()}` : ""}`);
       if (!response.ok) throw new Error(`Places request failed: ${response.status}`);
-      return (await response.json()) as PlaceSummary[];
+      const payload = await response.json();
+      return Array.isArray(payload) ? queryPlaces(payload as PlaceSummary[], query) : (payload as PlaceListResponse);
     } catch {
-      return this.fallback.listSummaries();
+      return this.fallback.listSummaries(query);
     }
   }
 
-  async getDetail(placeId: string): Promise<PlaceDetail | undefined> {
+  async getDetail(placeId: string, lang: "th" | "en" = "th"): Promise<PlaceDetail | undefined> {
     try {
-      const response = await fetch(`${this.endpoint}/places/${encodeURIComponent(placeId)}`);
+      const response = await fetch(`${this.endpoint}/places/${encodeURIComponent(placeId)}?lang=${lang}`);
       if (!response.ok) throw new Error(`Place detail request failed: ${response.status}`);
       return (await response.json()) as PlaceDetail;
     } catch {
-      return this.fallback.getDetail(placeId);
+      return this.fallback.getDetail(placeId, lang);
     }
   }
 }

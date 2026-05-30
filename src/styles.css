@@ -76,6 +76,7 @@ a {
 .poi-prompt,
 .poi-drawer,
 .garage-button,
+.place-toolbar,
 .garage-panel,
 .rotate-hint,
 .icon-button,
@@ -115,6 +116,32 @@ a {
   font-weight: 800;
   padding: 0 12px;
   cursor: pointer;
+}
+
+.place-toolbar {
+  position: absolute;
+  left: max(18px, env(safe-area-inset-left));
+  top: 112px;
+  display: flex;
+  gap: 8px;
+  max-width: min(720px, calc(100vw - 240px));
+  pointer-events: auto;
+}
+
+.place-toolbar select,
+.place-toolbar button {
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(11, 14, 18, 0.72);
+  color: #f8fafc;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 0 10px;
+}
+
+.place-toolbar select {
+  max-width: 150px;
 }
 
 .icon-button {
@@ -316,6 +343,12 @@ a {
   line-height: 1.45;
 }
 
+.drawer-body .attribution {
+  margin: 12px 0 0;
+  color: #93a4b8;
+  font-size: 11px;
+}
+
 .drawer-body dl {
   display: grid;
   grid-template-columns: 92px 1fr;
@@ -439,6 +472,23 @@ body.paused::after {
     max-height: 46vh;
   }
 
+  .place-toolbar {
+    top: 110px;
+    left: max(10px, env(safe-area-inset-left));
+    max-width: calc(100vw - 132px);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .place-toolbar select,
+  .place-toolbar button {
+    flex: 0 0 auto;
+    height: 32px;
+    max-width: 122px;
+    padding: 0 8px;
+    font-size: 11px;
+  }
+
   .speedometer {
     right: 18px;
     bottom: 156px;
@@ -471,6 +521,11 @@ body.paused::after {
   .garage-button {
     top: 54px;
     left: max(58px, calc(env(safe-area-inset-left) + 58px));
+  }
+
+  .place-toolbar {
+    top: 98px;
+    max-width: min(460px, calc(100vw - 190px));
   }
 
   .minimap {
@@ -527,6 +582,10 @@ body.paused::after {
   .pause-button,
   .garage-button {
     top: 100px;
+  }
+
+  .place-toolbar {
+    top: 146px;
   }
 
   .minimap {

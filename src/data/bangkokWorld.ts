@@ -1,105 +1,8 @@
 import type { BangkokWorldData, PlaceSummary } from "../types";
+import { getDistrictById } from "./bangkokDistricts";
+import { curatedPlaces } from "./curatedPlaces";
 
 export const BANGKOK_ORIGIN = { lat: 13.7563, lng: 100.5018 };
-
-const places: PlaceSummary[] = [
-  {
-    id: "wat-phra-kaew",
-    googlePlaceId: "mock-wat-phra-kaew",
-    name: "Wat Phra Kaew",
-    category: "temple",
-    lat: 13.7515,
-    lng: 100.4929,
-    district: "Phra Nakhon",
-    rating: 4.7,
-    userRatingCount: 12000,
-    tags: ["landmark", "temple", "tour"],
-  },
-  {
-    id: "grand-palace",
-    googlePlaceId: "mock-grand-palace",
-    name: "Grand Palace",
-    category: "tourist_attraction",
-    lat: 13.7500,
-    lng: 100.4913,
-    district: "Phra Nakhon",
-    rating: 4.5,
-    userRatingCount: 18000,
-    tags: ["landmark", "history", "tour"],
-  },
-  {
-    id: "yaowarat-food-street",
-    googlePlaceId: "mock-yaowarat-food-street",
-    name: "Yaowarat Food Street",
-    category: "restaurant",
-    lat: 13.7400,
-    lng: 100.5088,
-    district: "Samphanthawong",
-    rating: 4.6,
-    userRatingCount: 9000,
-    tags: ["street-food", "night", "food"],
-  },
-  {
-    id: "siam-paragon",
-    googlePlaceId: "mock-siam-paragon",
-    name: "Siam Paragon",
-    category: "shopping_mall",
-    lat: 13.7466,
-    lng: 100.5347,
-    district: "Pathum Wan",
-    rating: 4.6,
-    userRatingCount: 21000,
-    tags: ["shopping", "food", "transit"],
-  },
-  {
-    id: "lumphini-park",
-    googlePlaceId: "mock-lumphini-park",
-    name: "Lumphini Park",
-    category: "park",
-    lat: 13.7308,
-    lng: 100.5418,
-    district: "Pathum Wan",
-    rating: 4.5,
-    userRatingCount: 11000,
-    tags: ["park", "morning", "tour"],
-  },
-  {
-    id: "ari-cafe-zone",
-    googlePlaceId: "mock-ari-cafe-zone",
-    name: "Ari Cafe Zone",
-    category: "cafe",
-    lat: 13.7802,
-    lng: 100.5440,
-    district: "Phaya Thai",
-    rating: 4.4,
-    userRatingCount: 4200,
-    tags: ["cafe", "brunch", "trail"],
-  },
-  {
-    id: "chatuchak-market",
-    googlePlaceId: "mock-chatuchak-market",
-    name: "Chatuchak Weekend Market",
-    category: "tourist_attraction",
-    lat: 13.7998,
-    lng: 100.5500,
-    district: "Chatuchak",
-    rating: 4.4,
-    userRatingCount: 16000,
-    tags: ["market", "shopping", "food"],
-  },
-  {
-    id: "iconsiam",
-    googlePlaceId: "mock-iconsiam",
-    name: "ICONSIAM",
-    category: "shopping_mall",
-    lat: 13.7266,
-    lng: 100.5102,
-    district: "Khlong San",
-    rating: 4.6,
-    userRatingCount: 17000,
-    tags: ["river", "shopping", "food"],
-  },
-];
 
 const nodes = [
   ["n0", -360, -80],
@@ -164,11 +67,16 @@ export const bangkokWorld: BangkokWorldData = {
     segment("r21", "n13", "n14", "Chatuchak"),
     segment("r22", "n14", "n15", "Chatuchak"),
   ],
-  places,
+  places: curatedPlaces,
 };
 
 export function placeWorldPosition(place: PlaceSummary): { x: number; z: number } {
-  const district = bangkokWorld.districts.find((candidate) => candidate.name === place.district);
+  const bangkokDistrict = getDistrictById(place.districtId);
+  const zoneId = bangkokDistrict?.playableZoneId ?? place.districtId;
+  const district =
+    bangkokWorld.districts.find((candidate) => candidate.id === zoneId) ??
+    bangkokWorld.districts.find((candidate) => candidate.name === place.district || candidate.name === place.districtName) ??
+    nearestPlayableDistrict(place);
   if (!district) {
     return { x: 0, z: 0 };
   }
@@ -179,4 +87,12 @@ export function placeWorldPosition(place: PlaceSummary): { x: number; z: number 
     x: (district.bounds.minX + district.bounds.maxX) / 2 + lngOffset,
     z: (district.bounds.minZ + district.bounds.maxZ) / 2 - latOffset,
   };
+}
+
+function nearestPlayableDistrict(place: PlaceSummary): (typeof bangkokWorld.districts)[number] {
+  return bangkokWorld.districts.reduce((nearest, district) => {
+    const currentDistance = Math.hypot(place.lat - district.center.lat, place.lng - district.center.lng);
+    const nearestDistance = Math.hypot(place.lat - nearest.center.lat, place.lng - nearest.center.lng);
+    return currentDistance < nearestDistance ? district : nearest;
+  }, bangkokWorld.districts[0]);
 }

@@ -1,8 +1,15 @@
 import type { Mission, PlaceSummary } from "../types";
 
 export function createStarterMissions(places: PlaceSummary[]): Mission[] {
-  const byTag = (tag: string) => places.filter((place) => place.tags.includes(tag)).map((place) => place.id);
-  const byCategory = (category: PlaceSummary["category"]) => places.filter((place) => place.category === category).map((place) => place.id);
+  const curated = places.filter((place) => place.source === "curated");
+  const missionPlaces = curated.length ? curated : places;
+  const byTag = (tag: string) => missionPlaces.filter((place) => place.tags.includes(tag)).map((place) => place.id);
+  const byAnyTag = (tags: string[]) => missionPlaces.filter((place) => tags.some((tag) => place.tags.includes(tag))).map((place) => place.id);
+  const byAnyCategory = (categories: PlaceSummary["category"][]) => missionPlaces.filter((place) => categories.includes(place.category)).map((place) => place.id);
+  const route = (preferred: string[], fallback: string[]) => {
+    const unique = Array.from(new Set(preferred.filter((id) => places.some((place) => place.id === id))));
+    return unique.length ? unique : fallback.slice(0, 3);
+  };
 
   return [
     {
@@ -10,7 +17,7 @@ export function createStarterMissions(places: PlaceSummary[]): Mission[] {
       type: "tour_route",
       title: "Royal Island Tour",
       districts: ["Phra Nakhon"],
-      waypoints: byTag("tour").slice(0, 3),
+      waypoints: route(["grand-palace", "wat-phra-kaew", "wat-pho"], byTag("tour")).slice(0, 3),
       reward: { xp: 350, badge: "Explorer of Phra Nakhon" },
       unlockRequirements: {},
     },
@@ -19,7 +26,7 @@ export function createStarterMissions(places: PlaceSummary[]): Mission[] {
       type: "food_run",
       title: "Yaowarat Night Run",
       districts: ["Samphanthawong", "Khlong San"],
-      waypoints: byTag("food").slice(0, 3),
+      waypoints: route(["yaowarat-food-street", "banthat-thong-food-street", "wang-lang-market"], byAnyTag(["food", "street-food"])).slice(0, 3),
       timeLimit: 180,
       reward: { xp: 420, unlockVehicle: "siam-taxi" },
       unlockRequirements: { minXp: 0 },
@@ -29,7 +36,7 @@ export function createStarterMissions(places: PlaceSummary[]): Mission[] {
       type: "cafe_trail",
       title: "Ari Cafe Trail",
       districts: ["Phaya Thai", "Chatuchak"],
-      waypoints: byCategory("cafe"),
+      waypoints: byAnyCategory(["cafe", "bakery", "dessert"]).slice(0, 5),
       reward: { xp: 300, badge: "Cafe Trail Scout" },
       unlockRequirements: {},
     },
@@ -38,7 +45,7 @@ export function createStarterMissions(places: PlaceSummary[]): Mission[] {
       type: "time_trial",
       title: "Landmark Time Trial",
       districts: ["Pathum Wan", "Chatuchak"],
-      waypoints: ["siam-paragon", "lumphini-park", "chatuchak-market"],
+      waypoints: route(["siam-paragon", "lumphini-park", "chatuchak-market"], byTag("tour")).slice(0, 3),
       timeLimit: 210,
       reward: { xp: 520, unlockVehicle: "chao-phraya-sport" },
       unlockRequirements: { completedMissionIds: ["royal-island-tour"] },
@@ -48,7 +55,7 @@ export function createStarterMissions(places: PlaceSummary[]): Mission[] {
       type: "discovery",
       title: "Bangkok Discovery",
       districts: ["All districts"],
-      waypoints: places.map((place) => place.id),
+      waypoints: missionPlaces.map((place) => place.id),
       reward: { xp: 800, badge: "Bangkok Street Guide" },
       unlockRequirements: {},
     },

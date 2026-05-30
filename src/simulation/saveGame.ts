@@ -7,6 +7,7 @@ export const defaultSaveGame: SaveGame = {
     xp: 0,
     badges: [],
     activeMissionId: "royal-island-tour",
+    discoveryDailyXpByDistrict: {},
     missionProgress: {
       missionId: "royal-island-tour",
       activeWaypointIndex: 0,

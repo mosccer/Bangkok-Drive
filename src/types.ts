@@ -1,31 +1,77 @@
+export type PlaceSource = "curated" | "google" | "osm";
+
 export type PlaceCategory =
   | "tourist_attraction"
-  | "restaurant"
-  | "cafe"
-  | "museum"
   | "temple"
+  | "museum"
+  | "park"
   | "shopping_mall"
-  | "park";
+  | "market"
+  | "night_market"
+  | "restaurant"
+  | "street_food"
+  | "cafe"
+  | "bakery"
+  | "dessert";
 
 export interface PlaceSummary {
   id: string;
-  googlePlaceId: string;
+  source: PlaceSource;
+  googlePlaceId?: string;
   name: string;
+  nameTh: string;
+  nameEn?: string;
   category: PlaceCategory;
   lat: number;
   lng: number;
   district: string;
+  districtId: string;
+  districtName: string;
   rating?: number;
   userRatingCount?: number;
+  priceLevel?: number;
+  googleMapsUri?: string;
+  curatedPriority?: number;
+  attributionRequired: boolean;
+  updatedAt: string;
   tags: string[];
 }
 
 export interface PlaceDetail extends PlaceSummary {
+  addressTh?: string;
+  addressEn?: string;
+  phone?: string;
   openingHours?: string[];
   photos?: string[];
   websiteUri?: string;
   googleMapsUri?: string;
   description?: string;
+  descriptionTh?: string;
+  descriptionEn?: string;
+  sourceAttributions: Array<{
+    provider: string;
+    providerUri?: string;
+  }>;
+}
+
+export interface PlaceQuery {
+  districtId?: string;
+  category?: PlaceCategory;
+  nearLat?: number;
+  nearLng?: number;
+  radius?: number;
+  limit?: number;
+  cursor?: string;
+  lang?: "th" | "en";
+  tag?: string;
+}
+
+export interface PlaceListResponse {
+  places: PlaceSummary[];
+  nextCursor?: string;
+  total: number;
+  source: "supabase" | "static" | "mixed";
+  attribution: string[];
 }
 
 export type MissionType = "tour_route" | "food_run" | "cafe_trail" | "time_trial" | "discovery";
@@ -130,6 +176,7 @@ export interface CloudSave {
   unlockedVehicleIds: string[];
   completedMissionIds: string[];
   discoveredPlaceIds: string[];
+  discoveryDailyXpByDistrict?: Record<string, { date: string; xp: number }>;
 }
 
 export interface LeaderboardRun {
@@ -158,6 +205,7 @@ export interface SaveGame {
     badges: string[];
     activeMissionId: string;
     missionProgress?: MissionProgress;
+    discoveryDailyXpByDistrict?: Record<string, { date: string; xp: number }>;
   };
   activeVehicleId: string;
   unlockedVehicles: string[];

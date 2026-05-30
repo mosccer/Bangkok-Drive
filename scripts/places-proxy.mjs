@@ -1,15 +1,19 @@
-/* global process, fetch, URL, console */
+/* global process, console, URL */
 import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import {
+  cachedPlaceDetail,
+  fetchGoogleDetail,
+  findPlace,
+  loadCachedGoogleDetail,
+  loadSupabasePlaces,
+  normalizeGoogleDetail,
+  parsePlaceQuery,
+  queryPlaces,
+  readStaticPlaces,
+  storeCachedGoogleDetail,
+} from "../api/_places-utils.js";
 
 const port = Number(process.env.PORT ?? 8787);
-const key = process.env.GOOGLE_PLACES_API_KEY;
-const cachePath = resolve("public/data/places.json");
-
-async function readCachedPlaces() {
-  return JSON.parse(await readFile(cachePath, "utf8"));
-}
 
 function sendJson(response, status, body) {
   response.writeHead(status, {
@@ -20,68 +24,42 @@ function sendJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
-async function fetchGoogleDetail(placeId) {
-  if (!key || placeId.startsWith("mock-")) {
-    return undefined;
+async function loadPlaces() {
+  const staticPlaces = await readStaticPlaces();
+  try {
+    const supabasePlaces = await loadSupabasePlaces();
+    return supabasePlaces?.length ? { places: [...staticPlaces, ...supabasePlaces], source: "mixed" } : { places: staticPlaces, source: "static" };
+  } catch (error) {
+    console.warn("Supabase places cache unavailable", error);
+    return { places: staticPlaces, source: "static" };
   }
-
-  const response = await fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, {
-    headers: {
-      "X-Goog-Api-Key": key,
-      "X-Goog-FieldMask":
-        "id,displayName,formattedAddress,location,rating,userRatingCount,types,regularOpeningHours,photos,websiteUri,googleMapsUri,editorialSummary",
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Google Places detail failed: ${response.status}`);
-  }
-
-  return response.json();
-}
-
-function normalizeGoogleDetail(raw, cached) {
-  return {
-    ...cached,
-    googlePlaceId: raw.id ?? cached.googlePlaceId,
-    name: raw.displayName?.text ?? cached.name,
-    lat: raw.location?.latitude ?? cached.lat,
-    lng: raw.location?.longitude ?? cached.lng,
-    rating: raw.rating ?? cached.rating,
-    userRatingCount: raw.userRatingCount ?? cached.userRatingCount,
-    openingHours: raw.regularOpeningHours?.weekdayDescriptions,
-    photos: raw.photos?.slice(0, 3).map((photo) => photo.name),
-    websiteUri: raw.websiteUri,
-    googleMapsUri: raw.googleMapsUri,
-    description: raw.editorialSummary?.text ?? cached.description,
-  };
 }
 
 createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? "/", `http://${request.headers.host}`);
-    const places = await readCachedPlaces();
+    const { places, source } = await loadPlaces();
 
     if (url.pathname === "/api/places") {
-      sendJson(response, 200, places);
+      sendJson(response, 200, queryPlaces(places, parsePlaceQuery(request), source));
       return;
     }
 
     if (url.pathname.startsWith("/api/places/")) {
+      const lang = url.searchParams.get("lang") === "en" ? "en" : "th";
       const id = decodeURIComponent(url.pathname.replace("/api/places/", ""));
-      const cached = places.find((place) => place.id === id || place.googlePlaceId === id);
+      const cached = findPlace(places, id);
       if (!cached) {
         sendJson(response, 404, { error: "Place not found" });
         return;
       }
 
-      const raw = await fetchGoogleDetail(cached.googlePlaceId);
-      sendJson(response, 200, raw ? normalizeGoogleDetail(raw, cached) : {
-        ...cached,
-        openingHours: ["Set GOOGLE_PLACES_API_KEY to fetch live Google Places details."],
-        googleMapsUri: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(cached.name)}`,
-        description: "Cached Bangkok guide entry. Live details are fetched lazily when Google Places is configured.",
-      });
+      const cachedGooglePayload = await loadCachedGoogleDetail(cached.googlePlaceId, lang);
+      const raw = cachedGooglePayload ?? (await fetchGoogleDetail(cached.googlePlaceId, lang));
+      if (!cachedGooglePayload && raw) {
+        await storeCachedGoogleDetail(cached.googlePlaceId, lang, raw);
+      }
+      sendJson(response, 200, raw ? normalizeGoogleDetail(raw, cached, lang) : cachedPlaceDetail(cached, lang));
       return;
     }
 

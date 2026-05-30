@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "osm:import": "node scripts/import-osm-road-chunks.mjs",
+    "places:import": "node scripts/import-places.mjs",
     "places:proxy": "node scripts/places-proxy.mjs",
     "build": "tsc && vite build",
     "lint": "eslint .",

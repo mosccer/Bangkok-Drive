@@ -1,6 +1,8 @@
 import { isVehicleUnlocked } from "../data/vehicles";
+import { bangkokDistricts } from "../data/bangkokDistricts";
+import { placeDisplayName } from "../simulation/placeQueries";
 import { mpsToKmh } from "../simulation/speed";
-import type { Mission, PlaceDetail, PlaceSummary, SaveGame, VehicleDefinition, VehicleState } from "../types";
+import type { Mission, PlaceCategory, PlaceDetail, PlaceQuery, PlaceSummary, SaveGame, VehicleDefinition, VehicleState } from "../types";
 
 export class Hud {
   readonly root: HTMLDivElement;
@@ -10,12 +12,14 @@ export class Hud {
   private readonly drawer: HTMLElement;
   private readonly drawerBody: HTMLElement;
   private readonly stats: HTMLElement;
+  private readonly categorySelect: HTMLSelectElement;
+  private readonly districtSelect: HTMLSelectElement;
   private readonly garagePanel: HTMLElement;
   private readonly garageBody: HTMLElement;
   private readonly minimap: HTMLCanvasElement;
   private readonly minimapContext: CanvasRenderingContext2D;
 
-  constructor(host: HTMLElement) {
+  constructor(host: HTMLElement, onPlaceFiltersChange: (query: PlaceQuery) => void = () => undefined) {
     this.root = document.createElement("div");
     this.root.className = "hud";
     this.root.innerHTML = `
@@ -25,6 +29,30 @@ export class Hud {
       <canvas class="minimap" width="180" height="180" data-ui="minimap"></canvas>
       <div class="speedometer"><strong data-ui="speed">0</strong><span>km/h</span></div>
       <div class="stats-strip" data-ui="stats">XP 0 | Bangkok guide cache ready</div>
+      <div class="place-toolbar">
+        <select data-ui="category-filter" aria-label="Place category">
+          <option value="">All</option>
+          <option value="tourist_attraction">Tour</option>
+          <option value="temple">Temples</option>
+          <option value="museum">Museums</option>
+          <option value="park">Parks</option>
+          <option value="shopping_mall">Malls</option>
+          <option value="market">Markets</option>
+          <option value="night_market">Night</option>
+          <option value="restaurant">Food</option>
+          <option value="street_food">Street</option>
+          <option value="cafe">Cafe</option>
+          <option value="bakery">Bakery</option>
+          <option value="dessert">Dessert</option>
+        </select>
+        <select data-ui="district-filter" aria-label="Bangkok district">
+          <option value="">Bangkok</option>
+          ${bangkokDistricts.map((district) => `<option value="${district.id}">${district.nameEn}</option>`).join("")}
+        </select>
+        <button data-ui="preset-food">Nearby food</button>
+        <button data-ui="preset-cafe">Cafe trail</button>
+        <button data-ui="preset-tour">Tour spots</button>
+      </div>
       <div class="rotate-hint">Rotate for landscape driving</div>
       <button class="poi-prompt hidden" data-ui="poi-prompt"></button>
       <aside class="poi-drawer" data-ui="drawer" aria-live="polite">
@@ -58,6 +86,8 @@ export class Hud {
     this.drawer = this.mustFind("[data-ui='drawer']");
     this.drawerBody = this.mustFind("[data-ui='drawer-body']");
     this.stats = this.mustFind("[data-ui='stats']");
+    this.categorySelect = this.mustFind<HTMLSelectElement>("[data-ui='category-filter']");
+    this.districtSelect = this.mustFind<HTMLSelectElement>("[data-ui='district-filter']");
     this.garagePanel = this.mustFind("[data-ui='garage-panel']");
     this.garageBody = this.mustFind("[data-ui='garage-body']");
     this.minimap = this.mustFind<HTMLCanvasElement>("[data-ui='minimap']");
@@ -67,6 +97,28 @@ export class Hud {
     this.mustFind("[data-ui='close-drawer']").addEventListener("click", () => this.closeDrawer());
     this.mustFind("[data-ui='garage-button']").addEventListener("click", () => this.garagePanel.classList.toggle("open"));
     this.mustFind("[data-ui='close-garage']").addEventListener("click", () => this.garagePanel.classList.remove("open"));
+    const emitFilter = () => {
+      onPlaceFiltersChange({
+        category: (this.categorySelect.value || undefined) as PlaceCategory | undefined,
+        districtId: this.districtSelect.value || undefined,
+        limit: 150,
+        lang: "th",
+      });
+    };
+    this.categorySelect.addEventListener("change", emitFilter);
+    this.districtSelect.addEventListener("change", emitFilter);
+    this.mustFind("[data-ui='preset-food']").addEventListener("click", () => {
+      this.categorySelect.value = "street_food";
+      emitFilter();
+    });
+    this.mustFind("[data-ui='preset-cafe']").addEventListener("click", () => {
+      this.categorySelect.value = "cafe";
+      emitFilter();
+    });
+    this.mustFind("[data-ui='preset-tour']").addEventListener("click", () => {
+      this.categorySelect.value = "tourist_attraction";
+      emitFilter();
+    });
   }
 
   update(vehicle: VehicleState, mission: Mission, save: SaveGame, nearby?: PlaceSummary): void {
@@ -78,7 +130,7 @@ export class Hud {
 
     if (nearby) {
       this.poiPrompt.classList.remove("hidden");
-      this.poiPrompt.textContent = `Open ${nearby.name}`;
+      this.poiPrompt.textContent = `Open ${placeDisplayName(nearby)}`;
       this.poiPrompt.onclick = () => this.openSummary(nearby);
     } else {
       this.poiPrompt.classList.add("hidden");
@@ -106,7 +158,7 @@ export class Hud {
       const x = width / 2 + (pos.x - vehicle.position.x) * 0.12;
       const y = height / 2 + (pos.z - vehicle.position.z) * 0.12;
       if (x < 4 || x > width - 4 || y < 4 || y > height - 4) continue;
-      ctx.fillStyle = place.category === "cafe" ? "#67e8f9" : place.category === "restaurant" ? "#f97316" : "#facc15";
+      ctx.fillStyle = this.placeColor(place.category);
       ctx.beginPath();
       ctx.arc(x, y, 3.5, 0, Math.PI * 2);
       ctx.fill();
@@ -135,14 +187,16 @@ export class Hud {
 
   openDetail(detail: PlaceDetail): void {
     this.drawerBody.innerHTML = `
-      <h2>${detail.name}</h2>
-      <p>${detail.description ?? "Bangkok place detail"}</p>
+      <h2>${placeDisplayName(detail)}</h2>
+      <p>${detail.descriptionTh ?? detail.description ?? "ครอบคลุมข้อมูลจากแหล่งทางการและ Google Places ตามหมวดที่รองรับ"}</p>
       <dl>
-        <dt>District</dt><dd>${detail.district}</dd>
+        <dt>District</dt><dd>${detail.districtName}</dd>
         <dt>Category</dt><dd>${detail.category.replace("_", " ")}</dd>
         <dt>Rating</dt><dd>${detail.rating ?? "N/A"} (${detail.userRatingCount ?? 0})</dd>
+        ${detail.openingHours?.length ? `<dt>Hours</dt><dd>${detail.openingHours[0]}</dd>` : ""}
       </dl>
       <a class="drawer-link" href="${detail.googleMapsUri ?? "#"}" target="_blank" rel="noreferrer">Open in Google Maps</a>
+      ${detail.sourceAttributions.length ? `<p class="attribution">${detail.sourceAttributions.map((item) => item.provider).join(" | ")}</p>` : ""}
     `;
     this.drawer.classList.add("open");
   }
@@ -167,13 +221,14 @@ export class Hud {
 
   private openSummary(place: PlaceSummary): void {
     this.drawerBody.innerHTML = `
-      <h2>${place.name}</h2>
-      <p>Open this place while driving to view details from the Google Places proxy/cache.</p>
+      <h2>${placeDisplayName(place)}</h2>
+      <p>ครอบคลุมข้อมูลจากแหล่งทางการและ Google Places ตามหมวดที่รองรับ</p>
       <dl>
-        <dt>District</dt><dd>${place.district}</dd>
+        <dt>District</dt><dd>${place.districtName}</dd>
         <dt>Category</dt><dd>${place.category.replace("_", " ")}</dd>
         <dt>Rating</dt><dd>${place.rating ?? "N/A"}</dd>
       </dl>
+      ${place.attributionRequired ? `<p class="attribution">Google Maps</p>` : ""}
     `;
     this.drawer.classList.add("open");
   }
@@ -188,5 +243,12 @@ export class Hud {
       throw new Error(`Missing HUD element ${selector}`);
     }
     return element;
+  }
+
+  private placeColor(category: PlaceCategory): string {
+    if (category === "cafe" || category === "bakery" || category === "dessert") return "#67e8f9";
+    if (category === "restaurant" || category === "street_food" || category === "market" || category === "night_market") return "#f97316";
+    if (category === "park") return "#84cc16";
+    return "#facc15";
   }
 }

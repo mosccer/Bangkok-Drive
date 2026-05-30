@@ -1,4 +1,4 @@
-import type { GhostPlayerState, Mission, PlaceSummary, PlayerProfile, SaveGame } from "../../types";
+import type { GhostPlayerState, Mission, PlaceQuery, PlaceSummary, PlayerProfile, SaveGame } from "../../types";
 import { bangkokWorld, placeWorldPosition } from "../../data/bangkokWorld";
 import { findChunkIdAt, roadChunks } from "../../data/roadChunks";
 import { getVehicleDefinition, isVehicleUnlocked, vehicleDefinitions } from "../../data/vehicles";
@@ -6,6 +6,7 @@ import { InputController } from "../../input/InputController";
 import { PhysicsWorld } from "../../physics/PhysicsWorld";
 import { activeWaypoint, advanceMissionAtWaypoint, ensureMissionProgress } from "../../simulation/missionFlow";
 import { createStarterMissions } from "../../simulation/missions";
+import { visiblePlacesNearVehicle } from "../../simulation/placeQueries";
 import { loadSave, mergeCloudSave, saveGame } from "../../simulation/saveGame";
 import { VehicleController } from "../../simulation/VehicleController";
 import { pruneStaleGhosts } from "../../simulation/ghosts";
@@ -21,9 +22,12 @@ export class GameApp {
   private readonly renderer: WorldRenderer;
   private readonly vehicle = new VehicleController();
   private readonly physics = new PhysicsWorld();
-  private readonly missions: Mission[];
   private readonly placesService: PlacesService;
   private readonly online: OnlineService;
+  private missions: Mission[];
+  private places: PlaceSummary[] = bangkokWorld.places;
+  private visiblePlaces: PlaceSummary[] = bangkokWorld.places.slice(0, 24);
+  private placeQuery: PlaceQuery = { limit: 150, lang: "th" };
   private save: SaveGame;
   private profile?: PlayerProfile;
   private running = false;
@@ -41,10 +45,10 @@ export class GameApp {
     this.canvasHost.className = "canvas-host";
     this.host.append(this.canvasHost);
 
-    this.hud = new Hud(this.host);
+    this.hud = new Hud(this.host, (query) => this.setPlaceFilters(query));
     this.input = new InputController(this.hud.root);
-    this.renderer = new WorldRenderer(this.canvasHost, bangkokWorld);
-    this.missions = createStarterMissions(bangkokWorld.places);
+    this.renderer = new WorldRenderer(this.canvasHost);
+    this.missions = createStarterMissions(this.places);
     this.save = loadSave();
     this.renderer.setGraphicsQuality(this.save.settings.graphicsQuality);
     this.applyVehicle(this.save.activeVehicleId);
@@ -55,6 +59,7 @@ export class GameApp {
   }
 
   async start(): Promise<void> {
+    await this.refreshPlaces();
     await this.physics.init();
     this.physics.addRoadBarriers(
       roadChunks.flatMap((chunk) => chunk.nodes),
@@ -97,12 +102,14 @@ export class GameApp {
       this.renderer.update(vehicleState);
     }
 
+    this.updateVisiblePlaces();
     const activeMission = this.getActiveMission();
     const progress = ensureMissionProgress(this.save, activeMission);
-    const waypoint = activeWaypoint(activeMission, progress, bangkokWorld.places);
+    const waypoint = activeWaypoint(activeMission, progress, this.places);
     const nearby = this.findNearbyPlace();
     this.hud.update(this.vehicle.state, activeMission, this.save, nearby);
-    this.hud.drawMinimap(this.vehicle.state, bangkokWorld.places, placeWorldPosition, waypoint);
+    this.hud.drawMinimap(this.vehicle.state, this.visiblePlaces, placeWorldPosition, waypoint);
+    this.renderer.setVisiblePlaces(this.visiblePlaces);
     this.renderer.setActiveWaypoint(waypoint);
     this.renderer.setGhostCars(pruneStaleGhosts(this.ghostStates, performance.now()));
     void this.maybeOpenNearbyDetail(nearby);
@@ -116,7 +123,7 @@ export class GameApp {
   }
 
   private findNearbyPlace(): PlaceSummary | undefined {
-    return bangkokWorld.places.find((place) => {
+    return this.places.find((place) => {
       const pos = placeWorldPosition(place);
       return Math.hypot(pos.x - this.vehicle.state.position.x, pos.z - this.vehicle.state.position.z) < 24;
     });
@@ -127,9 +134,14 @@ export class GameApp {
     if (!nearby || this.save.discoveredPlaceIds.includes(nearby.id)) {
       return;
     }
+    const xpReward = this.discoveryXpReward(nearby);
     this.save = {
       ...this.save,
-      player: { ...this.save.player, xp: this.save.player.xp + 25 },
+      player: {
+        ...this.save.player,
+        xp: this.save.player.xp + xpReward,
+        discoveryDailyXpByDistrict: this.updatedDiscoveryXpLog(nearby, xpReward),
+      },
       discoveredPlaceIds: [...this.save.discoveredPlaceIds, nearby.id],
     };
     saveGame(this.save);
@@ -139,7 +151,7 @@ export class GameApp {
     const mission = this.getActiveMission();
     const progress = ensureMissionProgress(this.save, mission);
     this.save = { ...this.save, player: { ...this.save.player, missionProgress: progress } };
-    const waypoint = activeWaypoint(mission, progress, bangkokWorld.places);
+    const waypoint = activeWaypoint(mission, progress, this.places);
     if (!waypoint) return;
     const pos = placeWorldPosition(waypoint);
     if (Math.hypot(pos.x - this.vehicle.state.position.x, pos.z - this.vehicle.state.position.z) > 20) {
@@ -159,7 +171,7 @@ export class GameApp {
       return;
     }
     this.detailRequest = nearby.id;
-    const detail = await this.placesService.getDetail(nearby.id);
+    const detail = await this.placesService.getDetail(nearby.id, "th");
     if (detail && this.findNearbyPlace()?.id === nearby.id) {
       this.hud.openDetail(detail);
     }
@@ -223,5 +235,45 @@ export class GameApp {
     await this.online.joinGhostChannel(chunkId, (states) => {
       this.ghostStates = states;
     });
+  }
+
+  private async setPlaceFilters(query: PlaceQuery): Promise<void> {
+    this.placeQuery = { ...this.placeQuery, ...query };
+    this.updateVisiblePlaces();
+  }
+
+  private async refreshPlaces(): Promise<void> {
+    const response = await this.placesService.listSummaries({ limit: 150, lang: "th" });
+    this.places = response.places.length ? response.places : bangkokWorld.places;
+    this.missions = createStarterMissions(this.places);
+    this.updateVisiblePlaces();
+  }
+
+  private updateVisiblePlaces(): void {
+    const isMobile = window.matchMedia("(pointer: coarse)").matches || Math.min(window.innerWidth, window.innerHeight) <= 520;
+    this.visiblePlaces = visiblePlacesNearVehicle(this.places, this.vehicle.state, {
+      maxMarkers: isMobile ? 40 : 80,
+      radiusWorldUnits: isMobile ? 300 : 460,
+      category: this.placeQuery.category,
+      districtId: this.placeQuery.districtId,
+    });
+  }
+
+  private discoveryXpReward(place: PlaceSummary): number {
+    const today = new Date().toISOString().slice(0, 10);
+    const current = this.save.player.discoveryDailyXpByDistrict?.[place.districtId];
+    const usedToday = current?.date === today ? current.xp : 0;
+    return Math.max(0, Math.min(25, 250 - usedToday));
+  }
+
+  private updatedDiscoveryXpLog(place: PlaceSummary, reward: number): Record<string, { date: string; xp: number }> {
+    const today = new Date().toISOString().slice(0, 10);
+    const log = { ...(this.save.player.discoveryDailyXpByDistrict ?? {}) };
+    const current = log[place.districtId];
+    log[place.districtId] = {
+      date: today,
+      xp: (current?.date === today ? current.xp : 0) + reward,
+    };
+    return log;
   }
 }

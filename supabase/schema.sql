@@ -1,3 +1,5 @@
+create extension if not exists pgcrypto;
+
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   display_name text not null,
@@ -14,6 +16,7 @@ create table if not exists public.cloud_saves (
   unlocked_vehicle_ids text[] not null default '{krung-compact}',
   completed_mission_ids text[] not null default '{}',
   discovered_place_ids text[] not null default '{}',
+  discovery_daily_xp_by_district jsonb not null default '{}'::jsonb,
   updated_at timestamptz not null default now()
 );
 
@@ -26,11 +29,48 @@ create table if not exists public.leaderboard_runs (
   created_at timestamptz not null default now()
 );
 
-create table if not exists public.place_cache (
+drop table if exists public.place_cache;
+
+create table if not exists public.curated_places (
+  id text primary key,
+  summary jsonb not null,
+  district_id text not null,
+  category text not null,
+  is_active boolean not null default true,
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.google_place_index (
   google_place_id text primary key,
   summary jsonb not null,
-  detail jsonb,
+  district_id text not null,
+  category text not null,
+  last_seen_at timestamptz not null default now(),
+  import_run_id uuid,
+  is_active boolean not null default true,
   updated_at timestamptz not null default now()
+);
+
+create table if not exists public.google_place_response_cache (
+  cache_key text primary key,
+  google_place_id text not null references public.google_place_index(google_place_id) on delete cascade,
+  language_code text not null check (language_code in ('th', 'en')),
+  payload jsonb not null,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.place_import_runs (
+  id uuid primary key default gen_random_uuid(),
+  mode text not null,
+  status text not null check (status in ('running', 'completed', 'failed')),
+  quota_used integer not null default 0,
+  request_limit integer not null default 300,
+  resume_cursor jsonb,
+  errors jsonb not null default '[]'::jsonb,
+  started_at timestamptz not null default now(),
+  finished_at timestamptz
 );
 
 create table if not exists public.garage_unlocks (
@@ -43,7 +83,10 @@ create table if not exists public.garage_unlocks (
 alter table public.profiles enable row level security;
 alter table public.cloud_saves enable row level security;
 alter table public.leaderboard_runs enable row level security;
-alter table public.place_cache enable row level security;
+alter table public.curated_places enable row level security;
+alter table public.google_place_index enable row level security;
+alter table public.google_place_response_cache enable row level security;
+alter table public.place_import_runs enable row level security;
 alter table public.garage_unlocks enable row level security;
 
 drop policy if exists "profiles_select_own" on public.profiles;
@@ -70,8 +113,8 @@ create policy "leaderboard_read_all" on public.leaderboard_runs for select to au
 drop policy if exists "leaderboard_insert_own" on public.leaderboard_runs;
 create policy "leaderboard_insert_own" on public.leaderboard_runs for insert to authenticated with check (auth.uid() = profile_id);
 
-drop policy if exists "place_cache_read_all" on public.place_cache;
-create policy "place_cache_read_all" on public.place_cache for select to authenticated using (true);
+drop policy if exists "curated_places_read_all" on public.curated_places;
+create policy "curated_places_read_all" on public.curated_places for select to anon, authenticated using (is_active);
 
 drop policy if exists "garage_unlocks_select_own" on public.garage_unlocks;
 create policy "garage_unlocks_select_own" on public.garage_unlocks for select to authenticated using (auth.uid() = profile_id);
@@ -80,4 +123,19 @@ drop policy if exists "garage_unlocks_insert_own" on public.garage_unlocks;
 create policy "garage_unlocks_insert_own" on public.garage_unlocks for insert to authenticated with check (auth.uid() = profile_id);
 
 create index if not exists leaderboard_runs_mission_time_idx on public.leaderboard_runs (mission_id, time_ms);
-create index if not exists place_cache_updated_idx on public.place_cache (updated_at);
+create index if not exists curated_places_category_district_idx on public.curated_places (category, district_id);
+create index if not exists google_place_index_category_district_idx on public.google_place_index (category, district_id);
+create index if not exists google_place_index_last_seen_idx on public.google_place_index (last_seen_at);
+create index if not exists google_place_response_cache_expiry_idx on public.google_place_response_cache (expires_at);
+create index if not exists place_import_runs_started_idx on public.place_import_runs (started_at desc);
+
+grant usage on schema public to anon, authenticated, service_role;
+grant select on public.curated_places to anon, authenticated;
+revoke all on public.google_place_index from anon, authenticated;
+revoke all on public.google_place_response_cache from anon, authenticated;
+revoke all on public.place_import_runs from anon, authenticated;
+grant select on public.google_place_index to service_role;
+grant select, insert, update, delete on public.curated_places to service_role;
+grant select, insert, update, delete on public.google_place_index to service_role;
+grant select, insert, update, delete on public.google_place_response_cache to service_role;
+grant select, insert, update, delete on public.place_import_runs to service_role;

@@ -1,6 +1,5 @@
 import * as THREE from "three";
 import type {
-  BangkokWorldData,
   GhostPlayerState,
   GraphicsQuality,
   Landmark,
@@ -29,6 +28,7 @@ export class WorldRenderer {
   private readonly nodeById = new Map<string, RoadNode>();
   private readonly chunkGroups = new Map<string, THREE.Group>();
   private readonly ghostGroups = new Map<string, THREE.Group>();
+  private readonly placeMarkers = new Map<string, THREE.Object3D>();
   private readonly waypointGroup = new THREE.Group();
   private qualityProfile: RenderQualityProfile;
   private readonly roadMaterial: THREE.MeshStandardMaterial;
@@ -37,7 +37,7 @@ export class WorldRenderer {
   private readonly laneMaterial = new THREE.MeshBasicMaterial({ color: "#ffe15d" });
   private cameraInitialized = false;
 
-  constructor(private readonly canvasHost: HTMLElement, private readonly world: BangkokWorldData) {
+  constructor(private readonly canvasHost: HTMLElement) {
     this.qualityProfile = getRenderQualityProfile("medium", this.isMobileViewport());
     this.roadMaterial = createAsphaltMaterial(this.qualityProfile.useHighDetailMaterials);
     this.sidewalkMaterial = createSidewalkMaterial();
@@ -126,6 +126,28 @@ export class WorldRenderer {
     this.waypointGroup.add(beacon);
   }
 
+  setVisiblePlaces(places: PlaceSummary[]): void {
+    const active = new Set(places.map((place) => place.id));
+    for (const [id, marker] of this.placeMarkers) {
+      if (!active.has(id)) {
+        this.scene.remove(marker);
+        this.placeMarkers.delete(id);
+      }
+    }
+
+    for (const place of places) {
+      if (this.placeMarkers.has(place.id)) continue;
+      const pos = placeWorldPosition(place);
+      const marker = this.createPlaceMarker(place);
+      marker.position.set(pos.x, 5.2, pos.z);
+      marker.userData.float = true;
+      marker.userData.baseY = 5.2;
+      marker.userData.phase = pos.x * 0.1;
+      this.placeMarkers.set(place.id, marker);
+      this.scene.add(marker);
+    }
+  }
+
   setGhostCars(states: GhostPlayerState[]): void {
     const active = new Set(states.map((state) => state.profileId));
     for (const [id, group] of this.ghostGroups) {
@@ -177,7 +199,6 @@ export class WorldRenderer {
     this.scene.add(ground);
 
     this.addRiver();
-    this.addPlaces();
     this.scene.add(this.waypointGroup);
     this.scene.add(this.vehicle);
   }
@@ -264,20 +285,15 @@ export class WorldRenderer {
     group.add(tower);
   }
 
-  private addPlaces(): void {
-    for (const place of this.world.places) {
-      const pos = placeWorldPosition(place);
-      const marker = this.createPlaceMarker(place);
-      marker.position.set(pos.x, 5.2, pos.z);
-      marker.userData.float = true;
-      marker.userData.baseY = 5.2;
-      marker.userData.phase = pos.x * 0.1;
-      this.scene.add(marker);
-    }
-  }
-
   private createPlaceMarker(place: PlaceSummary): THREE.Object3D {
-    const color = place.category === "cafe" ? "#22d3ee" : place.category === "restaurant" ? "#fb923c" : "#fde047";
+    const color =
+      place.category === "cafe" || place.category === "bakery" || place.category === "dessert"
+        ? "#22d3ee"
+        : place.category === "restaurant" || place.category === "street_food" || place.category === "market" || place.category === "night_market"
+          ? "#fb923c"
+          : place.category === "park"
+            ? "#84cc16"
+            : "#fde047";
     const group = new THREE.Group();
     const pin = new THREE.Mesh(new THREE.ConeGeometry(2.3, 5.2, 24), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.18, roughness: 0.28, metalness: 0.16 }));
     pin.rotation.x = Math.PI;

@@ -30,13 +30,24 @@ Open `http://localhost:5173`.
 - Garage with five fictional city vehicle classes
 - Discovery XP, mission rewards, local save, and cloud-save-ready data shapes
 - DOM HUD, minimap, POI drawer, garage drawer, mobile controls
-- Google Places proxy interface with cached fallback data
+- Hybrid Bangkok Places: curated real guide entries plus Google Places-ready directory/cache
 - Supabase-ready guest auth, cloud save, leaderboard, and ghost car presence service
 
 ## Google Places Integration
 
 The browser client calls `/api/places` and `/api/places/:id` through `GooglePlacesProxyService`.
-If the backend is unavailable, it falls back to bundled cached sample places so the game remains playable.
+If the backend is unavailable, it falls back to bundled curated Bangkok places so the game remains playable.
+
+Current wording treats "all Bangkok places" as broad coverage by supported district/category queries, not a guarantee that every real business is present.
+
+Runtime query shape:
+
+```text
+/api/places?districtId=&category=&nearLat=&nearLng=&radius=&limit=&cursor=&lang=th
+/api/places/:id?lang=th
+```
+
+The HUD filters POIs by district/category without changing mission routes. The renderer caps visible markers near the player so mobile stays readable.
 
 Run the optional local proxy:
 
@@ -48,10 +59,20 @@ npm run places:proxy
 Backend production requirements:
 
 - Keep API key server-side.
-- Cache Place Summary results by type/grid cell.
+- Cache curated places in `curated_places` and Google index rows in `google_place_index`.
+- Keep Google response payloads in `google_place_response_cache` with expiry.
+- Cache Place Summary results by district/category cell.
 - Fetch Place Details lazily when a player opens a POI.
 - Deduplicate by `googlePlaceId`.
 - Respect Google Places quota, billing, and field-mask rules.
+
+Import commands:
+
+```powershell
+npm run places:import -- dry-run
+npm run places:import -- curated-seed --dry-run
+$env:GOOGLE_PLACES_API_KEY="your-key"; npm run places:import -- google-index --dry-run
+```
 
 ## Online Setup
 

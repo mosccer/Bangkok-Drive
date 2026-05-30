@@ -108,6 +108,7 @@ export class SupabaseOnlineService implements OnlineService {
         xp: data.xp ?? 0,
         badges: data.badges ?? [],
         activeMissionId: data.active_mission_id ?? "royal-island-tour",
+        discoveryDailyXpByDistrict: data.discovery_daily_xp_by_district ?? {},
       },
     };
   }
@@ -123,6 +124,7 @@ export class SupabaseOnlineService implements OnlineService {
       unlocked_vehicle_ids: save.unlockedVehicles,
       completed_mission_ids: save.completedMissionIds,
       discovered_place_ids: save.discoveredPlaceIds,
+      discovery_daily_xp_by_district: save.player.discoveryDailyXpByDistrict ?? {},
       updated_at: new Date().toISOString(),
     });
   }
