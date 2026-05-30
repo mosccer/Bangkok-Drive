@@ -2,7 +2,7 @@ import { BANGKOK_ORIGIN } from "./bangkokWorld";
 import type { GeoPoint, WorldAnchor, WorldMeters } from "../types";
 
 const METERS_PER_LAT_DEGREE = 111_320;
-const DEFAULT_SCALE = 1;
+const DEFAULT_SCALE = 2;
 const RECENTER_THRESHOLD_METERS = 1_500;
 
 export function latLngToWorld(lat: number, lng: number, scale = DEFAULT_SCALE): WorldMeters {
@@ -20,7 +20,7 @@ export function worldToLatLng(x: number, z: number, scale = DEFAULT_SCALE): GeoP
 export function createWorldAnchor(geo: GeoPoint, version = 0): WorldAnchor {
   return {
     geo,
-    worldMeters: latLngToWorld(geo.lat, geo.lng, 1),
+    worldMeters: latLngToWorld(geo.lat, geo.lng, DEFAULT_SCALE),
     version,
   };
 }
@@ -40,12 +40,12 @@ export function localToWorldMeters(local: WorldMeters, anchor: WorldAnchor): Wor
 }
 
 export function geoToLocal(geo: GeoPoint, anchor: WorldAnchor): WorldMeters {
-  return worldMetersToLocal(latLngToWorld(geo.lat, geo.lng, 1), anchor);
+  return worldMetersToLocal(latLngToWorld(geo.lat, geo.lng, DEFAULT_SCALE), anchor);
 }
 
 export function localToGeo(local: WorldMeters, anchor: WorldAnchor): GeoPoint {
   const world = localToWorldMeters(local, anchor);
-  return worldToLatLng(world.x, world.z, 1);
+  return worldToLatLng(world.x, world.z, DEFAULT_SCALE);
 }
 
 export function shouldRecenter(local: WorldMeters, thresholdMeters = RECENTER_THRESHOLD_METERS): boolean {

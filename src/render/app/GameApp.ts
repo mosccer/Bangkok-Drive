@@ -124,8 +124,9 @@ export class GameApp {
     const activeMission = this.getActiveMission();
     const progress = ensureMissionProgress(this.save, activeMission);
     const waypoint = activeWaypoint(activeMission, progress, this.places);
+    const waypointLocal = waypoint ? geoToLocal(waypoint, this.worldAnchor) : undefined;
     const nearby = this.findNearbyPlace();
-    this.hud.update(this.vehicle.state, activeMission, this.save, nearby);
+    this.hud.update(this.vehicle.state, activeMission, this.save, nearby, waypoint, waypointLocal);
     this.hud.drawMinimap(this.vehicle.state, this.visiblePlaces, (place) => geoToLocal(place, this.worldAnchor), waypoint);
     this.updateFastTravelPrompt(waypoint);
     this.renderer.setVisiblePlaces(this.visiblePlaces);

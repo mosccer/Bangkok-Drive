@@ -19,12 +19,23 @@ export class Hud {
   private readonly garageBody: HTMLElement;
   private readonly minimap: HTMLCanvasElement;
   private readonly minimapContext: CanvasRenderingContext2D;
+  private readonly compassTape: HTMLElement;
+  private readonly compassWaypoint: HTMLElement;
+  private readonly compassVal: HTMLElement;
 
   constructor(host: HTMLElement, onPlaceFiltersChange: (query: PlaceQuery) => void = () => undefined) {
     this.root = document.createElement("div");
     this.root.className = "hud";
     this.root.innerHTML = `
       <div class="objective-chip" data-ui="objective">Loading Bangkok route...</div>
+      <div class="compass-wrapper">
+        <div class="compass-needle">▼</div>
+        <div class="compass-viewport">
+          <div class="compass-tape" data-ui="compass-tape"></div>
+          <div class="compass-waypoint-marker hidden" data-ui="compass-waypoint">◆</div>
+        </div>
+        <div class="compass-heading-text" data-ui="compass-val">000° N</div>
+      </div>
       <button class="icon-button pause-button" data-control="pause" aria-label="Pause">II</button>
       <button class="garage-button" data-ui="garage-button">Garage</button>
       <canvas class="minimap" width="180" height="180" data-ui="minimap"></canvas>
@@ -97,6 +108,12 @@ export class Hud {
     const ctx = this.minimap.getContext("2d");
     if (!ctx) throw new Error("Minimap canvas context unavailable");
     this.minimapContext = ctx;
+
+    this.compassTape = this.mustFind("[data-ui='compass-tape']");
+    this.compassWaypoint = this.mustFind("[data-ui='compass-waypoint']");
+    this.compassVal = this.mustFind("[data-ui='compass-val']");
+    this.initCompassTape();
+
     this.mustFind("[data-ui='close-drawer']").addEventListener("click", () => this.closeDrawer());
     this.mustFind("[data-ui='garage-button']").addEventListener("click", () => this.garagePanel.classList.toggle("open"));
     this.mustFind("[data-ui='close-garage']").addEventListener("click", () => this.garagePanel.classList.remove("open"));
@@ -124,7 +141,14 @@ export class Hud {
     });
   }
 
-  update(vehicle: VehicleState, mission: Mission, save: SaveGame, nearby?: PlaceSummary): void {
+  update(
+    vehicle: VehicleState,
+    mission: Mission,
+    save: SaveGame,
+    nearby?: PlaceSummary,
+    waypoint?: PlaceSummary,
+    waypointLocal?: { x: number; z: number },
+  ): void {
     this.speed.textContent = Math.round(Math.abs(mpsToKmh(vehicle.speed))).toString();
     const progress = save.player.missionProgress;
     const stopText = progress ? `${Math.min(progress.reachedWaypointIds.length + 1, mission.waypoints.length)}/${mission.waypoints.length}` : `${mission.waypoints.length} stops`;
@@ -139,6 +163,86 @@ export class Hud {
       this.poiPrompt.classList.add("hidden");
       this.poiPrompt.onclick = null;
     }
+
+    // Compass calculations
+    const yaw = vehicle.rotation;
+    let degrees = (-yaw * 180 / Math.PI + 180) % 360;
+    if (degrees < 0) degrees += 360;
+
+    const roundDeg = Math.round(degrees);
+    let cardinal = "N";
+    if (roundDeg >= 338 || roundDeg < 23) cardinal = "N";
+    else if (roundDeg >= 23 && roundDeg < 68) cardinal = "NE";
+    else if (roundDeg >= 68 && roundDeg < 113) cardinal = "E";
+    else if (roundDeg >= 113 && roundDeg < 158) cardinal = "SE";
+    else if (roundDeg >= 158 && roundDeg < 203) cardinal = "S";
+    else if (roundDeg >= 203 && roundDeg < 248) cardinal = "SW";
+    else if (roundDeg >= 248 && roundDeg < 293) cardinal = "W";
+    else if (roundDeg >= 293 && roundDeg < 338) cardinal = "NW";
+
+    this.compassVal.textContent = `${roundDeg.toString().padStart(3, "0")}° ${cardinal}`;
+
+    const pixelsPerDegree = 2;
+    const shift = -pixelsPerDegree * degrees - 180;
+    this.compassTape.style.transform = `translateX(${shift}px)`;
+
+    if (waypoint && waypointLocal) {
+      const dx = waypointLocal.x - vehicle.position.x;
+      const dz = waypointLocal.z - vehicle.position.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist > 1) {
+        const angle = -Math.atan2(dz, dx);
+        let targetDegrees = (-angle * 180 / Math.PI + 180) % 360;
+        if (targetDegrees < 0) targetDegrees += 360;
+
+        let relAngle = targetDegrees - degrees;
+        if (relAngle > 180) relAngle -= 360;
+        if (relAngle < -180) relAngle += 360;
+
+        if (Math.abs(relAngle) <= 75) {
+          this.compassWaypoint.classList.remove("hidden");
+          const offset = relAngle * pixelsPerDegree;
+          this.compassWaypoint.style.transform = `translateX(${offset}px)`;
+        } else {
+          this.compassWaypoint.classList.add("hidden");
+        }
+      } else {
+        this.compassWaypoint.classList.add("hidden");
+      }
+    } else {
+      this.compassWaypoint.classList.add("hidden");
+    }
+  }
+
+  private initCompassTape(): void {
+    const tapeHtml: string[] = [];
+    const pixelsPerDegree = 2;
+    for (let deg = -90; deg <= 450; deg += 15) {
+      let label = "";
+      let tickClass = "tick-small";
+      const normalizedDeg = (deg + 360) % 360;
+      if (normalizedDeg === 0) { label = "N"; tickClass = "tick-large cardinal"; }
+      else if (normalizedDeg === 45) { label = "NE"; tickClass = "tick-large"; }
+      else if (normalizedDeg === 90) { label = "E"; tickClass = "tick-large cardinal"; }
+      else if (normalizedDeg === 135) { label = "SE"; tickClass = "tick-large"; }
+      else if (normalizedDeg === 180) { label = "S"; tickClass = "tick-large cardinal"; }
+      else if (normalizedDeg === 225) { label = "SW"; tickClass = "tick-large"; }
+      else if (normalizedDeg === 270) { label = "W"; tickClass = "tick-large cardinal"; }
+      else if (normalizedDeg === 315) { label = "NW"; tickClass = "tick-large"; }
+      else if (deg % 30 === 0) {
+        label = normalizedDeg.toString();
+        tickClass = "tick-medium";
+      }
+      const left = (deg + 90) * pixelsPerDegree;
+      tapeHtml.push(`
+        <div class="compass-tick ${tickClass}" style="left: ${left}px">
+          <span class="compass-tick-line"></span>
+          ${label ? `<span class="compass-tick-label">${label}</span>` : ""}
+        </div>
+      `);
+    }
+    this.compassTape.innerHTML = tapeHtml.join("");
+    this.compassTape.style.width = `${540 * pixelsPerDegree}px`;
   }
 
   updateFastTravel(target: { label: string; distanceMeters: number } | undefined, onFastTravel: (() => void) | undefined): void {

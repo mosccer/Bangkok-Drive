@@ -201,6 +201,7 @@ export class WorldRenderer {
       const localNodes = new Map(tile.nodes.map((nodeValue) => [nodeValue.id, { ...nodeValue, ...worldMetersToLocal(nodeValue, this.worldAnchor) }]));
       for (const segment of tile.segments) {
         this.addRoadFromNodes(segment, group, localNodes);
+        this.addBuildingsAlongRoad(segment, group, localNodes);
       }
       this.addTileBlocks(tile, group);
       this.roadTileGroups.set(tile.id, group);
@@ -529,7 +530,7 @@ export class WorldRenderer {
         const height = 6 + ((i * 13 + chunk.id.length) % 34);
         const x = chunk.bounds.minX + 15 + ((i * 37) % Math.max(20, chunk.bounds.maxX - chunk.bounds.minX - 30));
         const z = chunk.bounds.minZ + 15 + ((i * 29) % Math.max(20, chunk.bounds.maxZ - chunk.bounds.minZ - 30));
-        if (this.distanceToNearestRoad(x, z) < 32 || Math.hypot(x + 330, z + 80) < 72) {
+        if (this.distanceToNearestRoad(x, z) < 16 || Math.hypot(x + 330, z + 80) < 72) {
           continue;
         }
         const building = new THREE.Mesh(
@@ -559,7 +560,7 @@ export class WorldRenderer {
       const height = 5 + ((i * 11 + tile.districtIds.length) % 28);
       const x = minX + 24 + ((i * 59) % Math.max(40, widthSpan - 48));
       const z = minZ + 24 + ((i * 43) % Math.max(40, depthSpan - 48));
-      if (this.distanceToNearestTileRoad(x, z, tile) < 26) continue;
+      if (this.distanceToNearestTileRoad(x, z, tile) < 14) continue;
       const building = new THREE.Mesh(
         new THREE.BoxGeometry(width, height, depth),
         createBuildingMaterial(materialPalette[i % materialPalette.length], this.qualityProfile.useHighDetailMaterials),
@@ -580,6 +581,67 @@ export class WorldRenderer {
     tower.position.set(landmark.x, 13, landmark.z);
     tower.castShadow = true;
     group.add(tower);
+  }
+
+  private hashCode(str: string): number {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = (hash << 5) - hash + str.charCodeAt(i);
+      hash |= 0;
+    }
+    return hash;
+  }
+
+  private addBuildingsAlongRoad(segment: RoadSegment, group: THREE.Group, nodes?: Map<string, RoadNode>): void {
+    const from = nodes ? nodes.get(segment.from) : this.nodeById.get(segment.from);
+    const to = nodes ? nodes.get(segment.to) : this.nodeById.get(segment.to);
+    if (!from || !to) return;
+
+    const dx = to.x - from.x;
+    const dz = to.z - from.z;
+    const length = Math.hypot(dx, dz);
+    if (length < 20) return;
+
+    const angle = -Math.atan2(dz, dx);
+    const dirX = dx / length;
+    const dirZ = dz / length;
+    const rightX = -dirZ;
+    const rightZ = dirX;
+
+    const buildingInterval = 28;
+    const steps = Math.floor(length / buildingInterval);
+    const materialPalette = ["#9aa4a3", "#ba9d73", "#747f89", "#aeb89a", "#929aa2", "#b3c1b6", "#8d9ca6"];
+
+    for (let i = 1; i < steps; i++) {
+      const dist = i * buildingInterval;
+      const cx = from.x + dirX * dist;
+      const cz = from.z + dirZ * dist;
+
+      for (const side of [-1, 1]) {
+        const hash = Math.abs(this.hashCode(segment.id + "_" + i + "_" + side));
+        const width = 12 + (hash % 8);
+        const depth = 12 + ((hash >> 2) % 8);
+        const height = 15 + ((hash >> 4) % 35);
+
+        const offset = segment.width / 2 + depth / 2 + 1.2;
+        const bx = cx + rightX * offset * side;
+        const bz = cz + rightZ * offset * side;
+
+        if (Math.hypot(bx + 620, bz + 120) < 120) {
+          continue;
+        }
+
+        const building = new THREE.Mesh(
+          new THREE.BoxGeometry(width, height, depth),
+          createBuildingMaterial(materialPalette[hash % materialPalette.length], this.qualityProfile.useHighDetailMaterials),
+        );
+        building.position.set(bx, height / 2, bz);
+        building.rotation.y = angle;
+        building.castShadow = true;
+        building.receiveShadow = true;
+        group.add(building);
+      }
+    }
   }
 
   private createPlaceMarker(place: PlaceSummary): THREE.Object3D {
@@ -657,6 +719,7 @@ export class WorldRenderer {
       }
       for (const segment of chunk.segments) {
         this.addRoad(segment, group);
+        this.addBuildingsAlongRoad(segment, group);
       }
       this.addDistrictBlocks(chunk, group);
       for (const landmark of chunk.landmarks) {

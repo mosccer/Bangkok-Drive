@@ -5,22 +5,22 @@ import { curatedPlaces } from "./curatedPlaces";
 export const BANGKOK_ORIGIN = { lat: 13.7563, lng: 100.5018 };
 
 const nodes = [
-  ["n0", -360, -80],
-  ["n1", -220, -80],
-  ["n2", -60, -80],
-  ["n3", 120, -80],
-  ["n4", 300, -80],
-  ["n5", -220, -250],
-  ["n6", -60, -250],
-  ["n7", 120, -250],
-  ["n8", 300, -250],
-  ["n9", -220, 100],
-  ["n10", -60, 100],
-  ["n11", 120, 100],
-  ["n12", 300, 100],
-  ["n13", -60, 280],
-  ["n14", 120, 280],
-  ["n15", 300, 280],
+  ["n0", -720, -160],
+  ["n1", -440, -160],
+  ["n2", -120, -160],
+  ["n3", 240, -160],
+  ["n4", 600, -160],
+  ["n5", -440, -500],
+  ["n6", -120, -500],
+  ["n7", 240, -500],
+  ["n8", 600, -500],
+  ["n9", -440, 200],
+  ["n10", -120, 200],
+  ["n11", 240, 200],
+  ["n12", 600, 200],
+  ["n13", -120, 560],
+  ["n14", 240, 560],
+  ["n15", 600, 560],
 ] as const;
 
 const segment = (
@@ -34,12 +34,12 @@ const segment = (
 export const bangkokWorld: BangkokWorldData = {
   origin: BANGKOK_ORIGIN,
   districts: [
-    { id: "phra-nakhon", name: "Phra Nakhon", center: { lat: 13.7527, lng: 100.4940 }, bounds: { minX: -420, maxX: -160, minZ: -180, maxZ: 40 } },
-    { id: "samphanthawong", name: "Samphanthawong", center: { lat: 13.7400, lng: 100.5088 }, bounds: { minX: -160, maxX: 40, minZ: -180, maxZ: 40 } },
-    { id: "pathum-wan", name: "Pathum Wan", center: { lat: 13.7466, lng: 100.5347 }, bounds: { minX: 40, maxX: 240, minZ: -180, maxZ: 40 } },
-    { id: "sathorn-silom", name: "Sathorn / Silom", center: { lat: 13.7246, lng: 100.5342 }, bounds: { minX: 40, maxX: 360, minZ: -330, maxZ: -180 } },
-    { id: "ari-chatuchak", name: "Ari / Chatuchak", center: { lat: 13.7900, lng: 100.5480 }, bounds: { minX: -120, maxX: 360, minZ: 40, maxZ: 340 } },
-    { id: "khlong-san", name: "Khlong San", center: { lat: 13.7266, lng: 100.5102 }, bounds: { minX: -360, maxX: -120, minZ: -330, maxZ: -180 } },
+    { id: "phra-nakhon", name: "Phra Nakhon", center: { lat: 13.7527, lng: 100.4940 }, bounds: { minX: -840, maxX: -320, minZ: -360, maxZ: 80 } },
+    { id: "samphanthawong", name: "Samphanthawong", center: { lat: 13.7400, lng: 100.5088 }, bounds: { minX: -320, maxX: 80, minZ: -360, maxZ: 80 } },
+    { id: "pathum-wan", name: "Pathum Wan", center: { lat: 13.7466, lng: 100.5347 }, bounds: { minX: 80, maxX: 480, minZ: -360, maxZ: 80 } },
+    { id: "sathorn-silom", name: "Sathorn / Silom", center: { lat: 13.7246, lng: 100.5342 }, bounds: { minX: 80, maxX: 720, minZ: -660, maxZ: -360 } },
+    { id: "ari-chatuchak", name: "Ari / Chatuchak", center: { lat: 13.7900, lng: 100.5480 }, bounds: { minX: -240, maxX: 720, minZ: 80, maxZ: 680 } },
+    { id: "khlong-san", name: "Khlong San", center: { lat: 13.7266, lng: 100.5102 }, bounds: { minX: -720, maxX: -240, minZ: -660, maxZ: -360 } },
   ],
   roadNodes: nodes.map(([id, x, z]) => ({ id, x, z })),
   roadSegments: [
@@ -81,8 +81,8 @@ export function placeWorldPosition(place: PlaceSummary): { x: number; z: number 
     return { x: 0, z: 0 };
   }
 
-  const latOffset = (place.lat - district.center.lat) * 9000;
-  const lngOffset = (place.lng - district.center.lng) * 9000;
+  const latOffset = (place.lat - district.center.lat) * 18000;
+  const lngOffset = (place.lng - district.center.lng) * 18000;
   return {
     x: (district.bounds.minX + district.bounds.maxX) / 2 + lngOffset,
     z: (district.bounds.minZ + district.bounds.maxZ) / 2 - latOffset,
