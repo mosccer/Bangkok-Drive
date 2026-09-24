@@ -33,6 +33,7 @@ export function minimapWorldToScreen(
   width: number,
   height: number,
   scale = MINIMAP_WORLD_SCALE,
+  centerYRatio = 0.5,
 ): { x: number; y: number } {
   const dx = world.x - vehicle.position.x;
   const dz = world.z - vehicle.position.z;
@@ -40,9 +41,58 @@ export function minimapWorldToScreen(
   const right = -dx * Math.cos(vehicle.rotation) + dz * Math.sin(vehicle.rotation);
   return {
     x: width / 2 + right * scale,
-    y: height / 2 - forward * scale,
+    y: height * centerYRatio - forward * scale,
   };
 }
+
+export type MinimapTheme = "light" | "dark";
+
+const minimapPalettes: Record<MinimapTheme, Record<string, string>> = {
+  light: {
+    land: "#ece6d6",
+    water: "#8ec5e8",
+    park: "#b7dca0",
+    temple: "#f0d9a3",
+    casing: "#b9ad99",
+    road: "#ffffff",
+    major: "#fbbf5a",
+    majorCasing: "#d38b1c",
+    route: "#1d8fe0",
+    routeCasing: "#0b4f86",
+    traffic: "#6b7280",
+    ring: "rgba(15, 23, 42, 0.85)",
+  },
+  dark: {
+    land: "#1b2230",
+    water: "#1f4f78",
+    park: "#23452f",
+    temple: "#4a3d22",
+    casing: "#0d1119",
+    road: "#5b6678",
+    major: "#c7923a",
+    majorCasing: "#5c3f12",
+    route: "#38bdf8",
+    routeCasing: "#0c4a6e",
+    traffic: "#94a3b8",
+    ring: "rgba(226, 232, 240, 0.8)",
+  },
+};
+
+const categoryGlyphs: Partial<Record<PlaceCategory, string>> = {
+  temple: "🛕",
+  cafe: "☕",
+  bakery: "🥐",
+  dessert: "🍧",
+  restaurant: "🍜",
+  street_food: "🍜",
+  market: "🛍",
+  night_market: "🌙",
+  museum: "🏛",
+  park: "🌳",
+  shopping_mall: "🏬",
+  tourist_attraction: "📷",
+};
+
 
 export type MissionBoardStatus = "locked" | "available" | "active" | "completed";
 
@@ -59,7 +109,12 @@ export interface MinimapOverlay {
   roads: Array<{ ax: number; az: number; bx: number; bz: number; width: number; kind: string }>;
   traffic: Array<{ x: number; z: number }>;
   pickups: Array<{ x: number; z: number; kind: "coin" | "nitro" }>;
-  players?: Array<{ x: number; z: number; color: string }>;
+  players?: Array<{ x: number; z: number; color: string; name?: string }>;
+  areas?: Array<{ kind: "water" | "park" | "temple_ground"; points: Array<{ x: number; z: number }> }>;
+  route?: Array<{ x: number; z: number }>;
+  targetDistanceMeters?: number;
+  speedKmh?: number;
+  theme?: MinimapTheme;
   zoom: number;
 }
 
@@ -219,6 +274,8 @@ export class Hud {
   private readonly compassVal: HTMLElement;
   private handlers?: HudHandlers;
   private lastCareerKey = "";
+  private minimapScale = MINIMAP_WORLD_SCALE;
+  private minimapPixelRatio = 1;
 
   constructor(host: HTMLElement, onPlaceFiltersChange: (query: PlaceQuery) => void = () => undefined) {
     this.root = document.createElement("div");
@@ -728,6 +785,8 @@ export class Hud {
     this.fastTravelButton.onclick = onFastTravel;
   }
 
+  // Heading-up circular map: land, water/parks, cased roads, route, POI icons, players, then the
+  // destination pin (or a rim arrow with distance when it is off the map).
   drawMinimap(
     vehicle: VehicleState,
     places: PlaceSummary[],
@@ -736,92 +795,241 @@ export class Hud {
     overlay?: MinimapOverlay,
   ): void {
     const ctx = this.minimapContext;
-    const width = this.minimap.width;
-    const height = this.minimap.height;
-    const scale = overlay?.zoom ?? MINIMAP_WORLD_SCALE;
-    const project = (point: { x: number; z: number }) => minimapWorldToScreen(vehicle, point, width, height, scale);
-    const inside = ({ x, y }: { x: number; y: number }, margin = 4) => x >= margin && x <= width - margin && y >= margin && y <= height - margin;
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = "rgba(11, 14, 18, 0.78)";
-    ctx.fillRect(0, 0, width, height);
+    this.syncMinimapResolution();
+    const size = this.minimap.width / this.minimapPixelRatio;
+    const radius = size / 2 - 3;
+    const center = size / 2;
+    const palette = minimapPalettes[overlay?.theme ?? "light"];
+    const speedFactor = 1 - Math.min(0.35, ((overlay?.speedKmh ?? 0) / 120) * 0.35);
+    const targetScale = (overlay?.zoom ?? MINIMAP_WORLD_SCALE) * speedFactor * (size / 360) * 1.6;
+    this.minimapScale += (targetScale - this.minimapScale) * 0.08;
+    const scale = this.minimapScale;
+    const zoomLevel = scale / ((size / 360) * 1.6);
+    const project = (point: { x: number; z: number }) => minimapWorldToScreen(vehicle, point, size, size, scale, 0.6);
+    const inside = ({ x, y }: { x: number; y: number }, margin = 4) => Math.hypot(x - center, y - center) <= radius - margin;
+
+    ctx.setTransform(this.minimapPixelRatio, 0, 0, this.minimapPixelRatio, 0, 0);
+    ctx.clearRect(0, 0, size, size);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(center, center, radius, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.fillStyle = palette.land;
+    ctx.fillRect(0, 0, size, size);
+
+    for (const area of overlay?.areas ?? []) {
+      if (area.points.length < 3) continue;
+      ctx.fillStyle = area.kind === "water" ? palette.water : area.kind === "park" ? palette.park : palette.temple;
+      ctx.beginPath();
+      area.points.forEach((point, index) => {
+        const p = project(point);
+        if (index === 0) ctx.moveTo(p.x, p.y);
+        else ctx.lineTo(p.x, p.y);
+      });
+      ctx.closePath();
+      ctx.fill();
+    }
 
     if (overlay) {
       ctx.lineCap = "round";
-      for (const road of overlay.roads) {
-        const a = project({ x: road.ax, z: road.az });
-        const b = project({ x: road.bx, z: road.bz });
-        if (Math.max(a.x, b.x) < 0 || Math.min(a.x, b.x) > width || Math.max(a.y, b.y) < 0 || Math.min(a.y, b.y) > height) continue;
-        ctx.strokeStyle = road.kind === "motorway" ? "rgba(250, 204, 21, 0.75)" : road.width >= 14 ? "rgba(226, 232, 240, 0.62)" : "rgba(148, 163, 184, 0.5)";
-        ctx.lineWidth = Math.max(1.5, road.width * scale);
+      ctx.lineJoin = "round";
+      const visibleRoads = overlay.roads
+        .map((road) => ({ road, a: project({ x: road.ax, z: road.az }), b: project({ x: road.bx, z: road.bz }) }))
+        .filter(({ a, b }) => !(Math.max(a.x, b.x) < 0 || Math.min(a.x, b.x) > size || Math.max(a.y, b.y) < 0 || Math.min(a.y, b.y) > size));
+      const major = (kind: string) => kind === "motorway" || kind === "primary" || kind === "arterial" || kind === "bridge";
+      const roadWidth = (road: MinimapOverlay["roads"][number]) => Math.max(major(road.kind) ? 5 : 3.2, road.width * scale);
+      // Casings first, then fills, minor roads under major ones, so junctions merge cleanly.
+      for (const pass of ["casing", "fill"] as const) {
+        for (const drawMajor of [false, true]) {
+          for (const { road, a, b } of visibleRoads) {
+            if (major(road.kind) !== drawMajor) continue;
+            ctx.strokeStyle = pass === "casing" ? (drawMajor ? palette.majorCasing : palette.casing) : drawMajor ? palette.major : palette.road;
+            ctx.lineWidth = roadWidth(road) + (pass === "casing" ? 2.4 : 0);
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.stroke();
+          }
+        }
+      }
+
+      if ((!overlay.route || overlay.route.length < 2) && target) {
+        const end = project(worldPosition(target));
+        ctx.strokeStyle = palette.route;
+        ctx.lineWidth = 3;
+        ctx.setLineDash([7, 6]);
         ctx.beginPath();
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
+        ctx.moveTo(center, size * 0.6);
+        ctx.lineTo(end.x, end.y);
         ctx.stroke();
+        ctx.setLineDash([]);
       }
-      for (const pickup of overlay.pickups) {
-        const point = project(pickup);
-        if (!inside(point)) continue;
-        ctx.fillStyle = pickup.kind === "nitro" ? "#38bdf8" : "#fbbf24";
-        ctx.fillRect(point.x - 1.5, point.y - 1.5, 3, 3);
+      if (overlay.route && overlay.route.length > 1) {
+        const points = overlay.route.map(project);
+        for (const [color, width] of [
+          [palette.routeCasing, 8],
+          [palette.route, 5],
+        ] as const) {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = width;
+          ctx.beginPath();
+          points.forEach((point, index) => (index === 0 ? ctx.moveTo(point.x, point.y) : ctx.lineTo(point.x, point.y)));
+          ctx.stroke();
+        }
       }
-      for (const player of overlay.players ?? []) {
-        const point = project(player);
-        const clamped = { x: Math.max(6, Math.min(width - 6, point.x)), y: Math.max(6, Math.min(height - 6, point.y)) };
-        ctx.fillStyle = player.color;
-        ctx.strokeStyle = "#0b1220";
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(clamped.x, clamped.y, 5.5, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
+
+      if (zoomLevel >= MINIMAP_WORLD_SCALE) {
+        for (const pickup of overlay.pickups) {
+          const point = project(pickup);
+          if (!inside(point)) continue;
+          ctx.fillStyle = pickup.kind === "nitro" ? "#0ea5e9" : "#f59e0b";
+          ctx.beginPath();
+          ctx.arc(point.x, point.y, 1.8, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
-      ctx.fillStyle = "#e2e8f0";
+      ctx.fillStyle = palette.traffic;
       for (const car of overlay.traffic) {
         const point = project(car);
         if (!inside(point)) continue;
         ctx.beginPath();
-        ctx.arc(point.x, point.y, 2.6, 0, Math.PI * 2);
+        ctx.arc(point.x, point.y, 2.3, 0, Math.PI * 2);
         ctx.fill();
       }
     }
 
+    const showGlyphs = zoomLevel >= MINIMAP_WORLD_SCALE * 0.75;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "11px system-ui, 'Apple Color Emoji', 'Segoe UI Emoji', sans-serif";
     for (const place of places) {
+      if (target && place.id === target.id) continue;
       const point = project(worldPosition(place));
-      if (!inside(point)) continue;
-      ctx.fillStyle = this.placeColor(place.category);
+      if (!inside(point, 8)) continue;
+      ctx.fillStyle = "#ffffff";
+      ctx.strokeStyle = this.placeColor(place.category);
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(point.x, point.y, 3.5, 0, Math.PI * 2);
+      ctx.arc(point.x, point.y, showGlyphs ? 8 : 3.5, 0, Math.PI * 2);
       ctx.fill();
+      ctx.stroke();
+      const glyph = categoryGlyphs[place.category];
+      if (showGlyphs && glyph) ctx.fillText(glyph, point.x, point.y + 0.5);
+    }
+
+    for (const player of overlay?.players ?? []) {
+      const point = this.clampToRim(project(player), center, radius - 7);
+      ctx.fillStyle = player.color;
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 5.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
     }
 
     if (target) {
-      const { x, y } = project(worldPosition(target));
-      const clampedX = Math.max(8, Math.min(width - 8, x));
-      const clampedY = Math.max(8, Math.min(height - 8, y));
-      ctx.strokeStyle = "#67e8f9";
-      ctx.lineWidth = 2;
-      ctx.setLineDash([6, 5]);
-      ctx.beginPath();
-      ctx.moveTo(width / 2, height / 2);
-      ctx.lineTo(clampedX, clampedY);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = "#67e8f9";
-      ctx.beginPath();
-      ctx.arc(clampedX, clampedY, 5, 0, Math.PI * 2);
-      ctx.fill();
+      const point = project(worldPosition(target));
+      const onMap = inside(point, 12);
+      if (onMap) {
+        this.drawPin(ctx, point.x, point.y);
+      } else {
+        const rim = this.clampToRim(point, center, radius - 12);
+        ctx.save();
+        ctx.translate(rim.x, rim.y);
+        ctx.rotate(Math.atan2(point.y - center, point.x - center));
+        ctx.fillStyle = "#ef4444";
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(10, 0);
+        ctx.lineTo(-7, -8);
+        ctx.lineTo(-3, 0);
+        ctx.lineTo(-7, 8);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+      if (overlay?.targetDistanceMeters !== undefined) {
+        const label = formatDistance(overlay.targetDistanceMeters);
+        const labelPoint = onMap ? { x: point.x, y: point.y - 30 } : this.clampToRim(point, center, radius - 34);
+        ctx.font = "800 11px system-ui, sans-serif";
+        const width = ctx.measureText(label).width + 12;
+        ctx.fillStyle = "rgba(15, 23, 42, 0.88)";
+        ctx.beginPath();
+        ctx.roundRect(labelPoint.x - width / 2, labelPoint.y - 9, width, 18, 9);
+        ctx.fill();
+        ctx.fillStyle = "#ffffff";
+        ctx.fillText(label, labelPoint.x, labelPoint.y + 0.5);
+      }
     }
 
-    ctx.strokeStyle = "rgba(255,255,255,0.14)";
-    ctx.lineWidth = 1;
-    ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
-    ctx.fillStyle = "#f8fafc";
+    const px = center;
+    const py = size * 0.6;
+    ctx.fillStyle = "#0ea5e9";
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 2.5;
     ctx.beginPath();
-    ctx.moveTo(width / 2, height / 2 - 8);
-    ctx.lineTo(width / 2 - 5, height / 2 + 6);
-    ctx.lineTo(width / 2 + 5, height / 2 + 6);
+    ctx.moveTo(px, py - 12);
+    ctx.lineTo(px - 8.5, py + 8);
+    ctx.lineTo(px, py + 4);
+    ctx.lineTo(px + 8.5, py + 8);
     ctx.closePath();
     ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+
+    // Rim with a north marker, since the map turns with the car.
+    ctx.strokeStyle = palette.ring;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(center, center, radius, 0, Math.PI * 2);
+    ctx.stroke();
+    const north = minimapWorldToScreen(vehicle, { x: vehicle.position.x, z: vehicle.position.z - 1000 }, size, size, 1, 0.5);
+    const northPoint = this.clampToRim(north, center, radius - 1);
+    ctx.fillStyle = "#ef4444";
+    ctx.beginPath();
+    ctx.arc(northPoint.x, northPoint.y, 9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "900 11px system-ui, sans-serif";
+    ctx.fillText("N", northPoint.x, northPoint.y + 0.5);
+  }
+
+  private drawPin(ctx: CanvasRenderingContext2D, x: number, y: number): void {
+    ctx.fillStyle = "#ef4444";
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.bezierCurveTo(x - 10, y - 11, x - 10, y - 24, x, y - 24);
+    ctx.bezierCurveTo(x + 10, y - 24, x + 10, y - 11, x, y);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(x, y - 16, 3.4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  private clampToRim(point: { x: number; y: number }, center: number, radius: number): { x: number; y: number } {
+    const dx = point.x - center;
+    const dy = point.y - center;
+    const distance = Math.hypot(dx, dy);
+    if (distance <= radius) return point;
+    return { x: center + (dx / distance) * radius, y: center + (dy / distance) * radius };
+  }
+
+  // Keeps the canvas backing store at device resolution so lines and icons stay sharp on phones.
+  private syncMinimapResolution(): void {
+    const cssSize = Math.max(1, Math.round(this.minimap.clientWidth || 360));
+    const target = Math.round(cssSize * Math.min(2, window.devicePixelRatio || 1));
+    if (this.minimap.width !== target) {
+      this.minimap.width = target;
+      this.minimap.height = target;
+    }
+    this.minimapPixelRatio = target / cssSize;
   }
 
   setMinimapZoomLabel(zoomIndex: number): void {

@@ -1,4 +1,4 @@
-import type { CameraMode, DailyChallengeKind, Mission, PlaceQuery, PlaceSummary, PlayerProfile, RoadTile, SaveGame, UpgradeSlot, VehicleDefinition } from "../../types";
+import type { CameraMode, DailyChallengeKind, MapArea, Mission, WorldMeters, PlaceQuery, PlaceSummary, PlayerProfile, RoadTile, SaveGame, UpgradeSlot, VehicleDefinition } from "../../types";
 import { GameAudio } from "../../audio/GameAudio";
 import { bangkokWorld } from "../../data/bangkokWorld";
 import {
@@ -43,6 +43,7 @@ import { createFastTravelPoint, shouldOfferFastTravel } from "../../simulation/f
 import { addNitro, createNitroState, nitroTuningForLevel, updateNitro, type NitroState, type NitroTuning } from "../../simulation/nitro";
 import { levelForXp, levelUpCoinBonus } from "../../simulation/progression";
 import { nearestRoadPoint, roadSegmentsForTiles, yawForDirection, type WorldRoadSegment } from "../../simulation/roadGeometry";
+import { buildRoadGraph, findRoute, type RoadGraph } from "../../simulation/routing";
 import { loadSave, mergeCloudSave, saveGame } from "../../simulation/saveGame";
 import { matchesPlaceCategory, placeDisplayName } from "../../simulation/placeQueries";
 import { mpsToKmh } from "../../simulation/speed";
@@ -134,6 +135,12 @@ export class GameApp {
   private lastPanelRefresh = 0;
   private guideTarget?: PlaceSummary;
   private lastGuideRefresh = 0;
+  private mapAreas: MapArea[] = [];
+  private roadGraph?: RoadGraph;
+  private routeWorld?: WorldMeters[];
+  private routeKey = "";
+  private lastRouteTime = 0;
+  private minimapTarget?: PlaceSummary;
 
   constructor(private readonly host: HTMLElement) {
     this.host.className = "game-shell";
@@ -275,6 +282,8 @@ export class GameApp {
     this.hud.update(this.vehicle.state, activeMission, this.save, nearby, waypoint, waypointLocal, missionHud, missionStop);
     this.hud.updateNitro(this.nitro.charge, this.nitroActive, this.nitro.locked);
     this.hud.updateDrift(this.drift);
+    this.minimapTarget = waypoint;
+    this.updateRoute(time, waypoint);
     this.hud.drawMinimap(this.vehicle.state, this.visiblePlaces, (place) => geoToLocal(place, this.worldAnchor), waypoint, this.minimapOverlay());
     this.updateFastTravelPrompt(waypoint);
     this.renderer.setVisiblePlaces(this.visiblePlaces);
@@ -794,9 +803,44 @@ export class GameApp {
       roads: this.minimapRoads,
       traffic: this.traffic.cars.map((car) => worldMetersToLocal(car, this.worldAnchor)),
       pickups: this.visiblePickups.map((item) => ({ kind: item.kind, ...worldMetersToLocal(item, this.worldAnchor) })),
-      players: this.remotePlayers.views(performance.now()).map((view) => ({ color: view.color, ...geoToLocal(view, this.worldAnchor) })),
+      players: this.remotePlayers.views(performance.now()).map((view) => ({ color: view.color, name: view.name, ...geoToLocal(view, this.worldAnchor) })),
+      areas: this.minimapAreas(),
+      route: this.routeWorld?.map((point) => worldMetersToLocal(point, this.worldAnchor)),
+      targetDistanceMeters: this.minimapTarget ? distanceMetersBetweenGeo(localToGeo(this.vehicle.state.position, this.worldAnchor), this.minimapTarget) : undefined,
+      speedKmh: Math.abs(mpsToKmh(this.vehicle.state.speed)),
+      theme: this.save.settings.visualMood === "neon_night" ? "dark" : "light",
       zoom: MINIMAP_ZOOM_LEVELS[this.minimapZoomIndex],
     };
+  }
+
+  // Road route from the car to the current target over the loaded road graph, refreshed every ~1.2 s.
+  private updateRoute(time: number, target?: PlaceSummary): void {
+    if (!target || !this.roadGraph) {
+      this.routeWorld = undefined;
+      this.routeKey = "";
+      return;
+    }
+    const key = `${target.id}|${this.roadTileKey}`;
+    if (key === this.routeKey && time - this.lastRouteTime < 1200) return;
+    this.routeKey = key;
+    this.lastRouteTime = time;
+    const from = localToWorldMeters(this.vehicle.state.position, this.worldAnchor);
+    const to = localToWorldMeters(geoToLocal(target, this.worldAnchor), this.worldAnchor);
+    const path = findRoute(this.roadGraph, from, to);
+    this.routeWorld = path ? [from, ...path, to] : undefined;
+  }
+
+  private minimapAreaCache?: { key: string; areas: NonNullable<MinimapOverlay["areas"]> };
+
+  private minimapAreas(): MinimapOverlay["areas"] {
+    const key = `${this.worldAnchor.version}|${this.worldAnchor.worldMeters.x}|${this.worldAnchor.worldMeters.z}|${this.mapAreas.length}`;
+    if (this.minimapAreaCache?.key !== key) {
+      this.minimapAreaCache = {
+        key,
+        areas: this.mapAreas.map((area) => ({ kind: area.kind, points: area.outer.map((point) => worldMetersToLocal(point, this.worldAnchor)) })),
+      };
+    }
+    return this.minimapAreaCache.areas;
   }
 
   private async tickOnline(time: number): Promise<void> {
@@ -1116,6 +1160,7 @@ export class GameApp {
       this.mapStreaming.attribution(),
     ]);
     this.renderer.setMapAreas(areas);
+    this.mapAreas = areas;
     this.hud.setMapAttribution(attribution);
     if (osmPlaces.length) {
       this.mergePlaces(osmPlaces);
@@ -1146,6 +1191,8 @@ export class GameApp {
     if (key === this.roadTileKey) return;
     this.roadTileKey = key;
     this.roadSegments = roadSegmentsForTiles(tiles);
+    this.roadGraph = buildRoadGraph(this.roadSegments);
+    this.routeKey = "";
     this.collectibles.setTiles(tiles);
     this.traffic.setRoads(this.roadSegments);
     this.lastPickupRefresh = 0;
