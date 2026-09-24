@@ -2,7 +2,9 @@ import { BANGKOK_ORIGIN } from "./bangkokWorld";
 import type { GeoPoint, WorldAnchor, WorldMeters } from "../types";
 
 const METERS_PER_LAT_DEGREE = 111_320;
-const DEFAULT_SCALE = 2;
+// World units per real meter. Road tiles, places and the floating origin must all use this scale.
+export const MAP_SCALE = 2;
+const DEFAULT_SCALE = MAP_SCALE;
 const RECENTER_THRESHOLD_METERS = 1_500;
 
 export function latLngToWorld(lat: number, lng: number, scale = DEFAULT_SCALE): WorldMeters {
@@ -54,7 +56,7 @@ export function shouldRecenter(local: WorldMeters, thresholdMeters = RECENTER_TH
 
 export function recenterAnchor(anchor: WorldAnchor, vehicleLocal: WorldMeters): { anchor: WorldAnchor; vehicleLocal: WorldMeters; vehicleGeo: GeoPoint } {
   const vehicleWorld = localToWorldMeters(vehicleLocal, anchor);
-  const vehicleGeo = worldToLatLng(vehicleWorld.x, vehicleWorld.z, 1);
+  const vehicleGeo = worldToLatLng(vehicleWorld.x, vehicleWorld.z, DEFAULT_SCALE);
   return {
     anchor: {
       geo: vehicleGeo,

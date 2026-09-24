@@ -35,6 +35,10 @@ export class VehicleController {
     return this.state;
   }
 
+  applyImpact(speedFactor: number): void {
+    this.state.speed *= speedFactor;
+  }
+
   update(dt: number, input: InputActions): VehicleState {
     this.state.inputActions = input;
     const forward = input.accelerate ? 1 : 0;

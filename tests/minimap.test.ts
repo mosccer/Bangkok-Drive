@@ -20,9 +20,15 @@ describe("minimap heading-up projection", () => {
     expect(point.y).toBeLessThan(180);
   });
 
+  // Rotation 0 faces +z (south). As in the 3D chase camera, the driver's right is -x (west).
   it("puts a point on the vehicle right side to the right of center", () => {
-    const point = minimapWorldToScreen(vehicle(0), { x: 100, z: 0 }, 360, 360);
+    const point = minimapWorldToScreen(vehicle(0), { x: -100, z: 0 }, 360, 360);
     expect(point.x).toBeGreaterThan(180);
     expect(point.y).toBeCloseTo(180);
+  });
+
+  it("keeps the map unmirrored for an east-facing vehicle", () => {
+    const southOfCar = minimapWorldToScreen(vehicle(Math.PI / 2), { x: 0, z: 100 }, 360, 360);
+    expect(southOfCar.x).toBeGreaterThan(180);
   });
 });

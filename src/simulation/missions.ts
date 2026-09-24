@@ -18,7 +18,7 @@ export function createStarterMissions(places: PlaceSummary[]): Mission[] {
       title: "Royal Island Tour",
       districts: ["Phra Nakhon"],
       waypoints: route(["grand-palace", "wat-phra-kaew", "wat-pho"], byTag("tour")).slice(0, 3),
-      reward: { xp: 350, badge: "Explorer of Phra Nakhon" },
+      reward: { xp: 350, coins: 120, badge: "Explorer of Phra Nakhon" },
       unlockRequirements: {},
     },
     {
@@ -28,7 +28,7 @@ export function createStarterMissions(places: PlaceSummary[]): Mission[] {
       districts: ["Samphanthawong", "Khlong San"],
       waypoints: route(["yaowarat-food-street", "banthat-thong-food-street", "wang-lang-market"], byAnyTag(["food", "street-food"])).slice(0, 3),
       timeLimit: 180,
-      reward: { xp: 420, unlockVehicle: "siam-taxi" },
+      reward: { xp: 420, coins: 160, unlockVehicle: "siam-taxi" },
       unlockRequirements: { minXp: 0 },
     },
     {
@@ -37,7 +37,7 @@ export function createStarterMissions(places: PlaceSummary[]): Mission[] {
       title: "Ari Cafe Trail",
       districts: ["Phaya Thai", "Chatuchak"],
       waypoints: byAnyCategory(["cafe", "bakery", "dessert"]).slice(0, 5),
-      reward: { xp: 300, badge: "Cafe Trail Scout" },
+      reward: { xp: 300, coins: 120, badge: "Cafe Trail Scout" },
       unlockRequirements: {},
     },
     {
@@ -47,7 +47,7 @@ export function createStarterMissions(places: PlaceSummary[]): Mission[] {
       districts: ["Pathum Wan", "Chatuchak"],
       waypoints: route(["siam-paragon", "lumphini-park", "chatuchak-market"], byTag("tour")).slice(0, 3),
       timeLimit: 210,
-      reward: { xp: 520, unlockVehicle: "chao-phraya-sport" },
+      reward: { xp: 520, coins: 220, unlockVehicle: "chao-phraya-sport" },
       unlockRequirements: { completedMissionIds: ["royal-island-tour"] },
     },
     {
@@ -56,7 +56,7 @@ export function createStarterMissions(places: PlaceSummary[]): Mission[] {
       title: "Bangkok Discovery",
       districts: ["All districts"],
       waypoints: missionPlaces.map((place) => place.id),
-      reward: { xp: 800, badge: "Bangkok Street Guide" },
+      reward: { xp: 800, coins: 400, badge: "Bangkok Street Guide" },
       unlockRequirements: {},
     },
   ];
@@ -68,4 +68,14 @@ export function availableMissions(missions: Mission[], xp: number, completedMiss
     const required = mission.unlockRequirements.completedMissionIds ?? [];
     return xp >= minXp && required.every((id) => completedMissionIds.includes(id));
   });
+}
+
+export function isMissionAvailable(mission: Mission, xp: number, completedMissionIds: string[]): boolean {
+  return availableMissions([mission], xp, completedMissionIds).length > 0;
+}
+
+export function nextMissionAfter(missions: Mission[], currentId: string, xp: number, completedMissionIds: string[]): Mission | undefined {
+  const open = availableMissions(missions, xp, completedMissionIds).filter((mission) => !completedMissionIds.includes(mission.id) && mission.waypoints.length);
+  const currentIndex = missions.findIndex((mission) => mission.id === currentId);
+  return open.find((mission) => missions.indexOf(mission) > currentIndex) ?? open.find((mission) => mission.id !== currentId);
 }

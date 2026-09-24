@@ -279,11 +279,11 @@ const seeds: TileSeed[] = [
 ];
 
 function buildTile(seed: TileSeed): RoadTile {
-  const center = latLngToWorld(seed.center.lat, seed.center.lng, 1);
+  const center = latLngToWorld(seed.center.lat, seed.center.lng);
   const nodes: RoadTile["nodes"] = [];
   const segments: RoadTile["segments"] = [];
   const allPoints = seed.roads.flatMap((road) => road.points);
-  const projected = allPoints.map((point) => latLngToWorld(point.lat, point.lng, 1));
+  const projected = allPoints.map((point) => latLngToWorld(point.lat, point.lng));
   const minX = Math.min(center.x - TILE_SIZE_METERS / 2, ...projected.map((point) => point.x));
   const maxX = Math.max(center.x + TILE_SIZE_METERS / 2, ...projected.map((point) => point.x));
   const minZ = Math.min(center.z - TILE_SIZE_METERS / 2, ...projected.map((point) => point.z));
@@ -292,7 +292,7 @@ function buildTile(seed: TileSeed): RoadTile {
   for (const road of seed.roads) {
     let previousNodeId: string | undefined;
     road.points.forEach((point, pointIndex) => {
-      const meters = latLngToWorld(point.lat, point.lng, 1);
+      const meters = latLngToWorld(point.lat, point.lng);
       const nodeId = `${seed.id}-${road.id}-n${pointIndex}`;
       nodes.push({ id: nodeId, x: meters.x, z: meters.z });
       if (previousNodeId) {

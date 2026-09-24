@@ -1,6 +1,17 @@
-import type { SaveGame } from "../types";
+import type { DriverStats, SaveGame } from "../types";
 
 const KEY = "mosgame.save.v1";
+
+export const defaultDriverStats: DriverStats = {
+  distanceMeters: 0,
+  topSpeedKmh: 0,
+  coinsCollected: 0,
+  nearMisses: 0,
+  crashes: 0,
+  bestDrift: 0,
+  totalDrift: 0,
+  fastTravels: 0,
+};
 
 export const defaultSaveGame: SaveGame = {
   player: {
@@ -15,8 +26,16 @@ export const defaultSaveGame: SaveGame = {
       startedAt: 0,
     },
   },
+  career: {
+    coins: 0,
+    stats: defaultDriverStats,
+    achievements: [],
+    bestTimesMs: {},
+  },
   activeVehicleId: "krung-compact",
   unlockedVehicles: ["krung-compact"],
+  vehicleUpgrades: {},
+  vehiclePaint: {},
   discoveredPlaceIds: [],
   completedMissionIds: [],
   settings: {
@@ -26,6 +45,8 @@ export const defaultSaveGame: SaveGame = {
     cameraShake: true,
     speedEffects: true,
     reduceMotion: false,
+    soundEnabled: true,
+    cameraMode: "chase",
     units: "metric",
   },
 };
@@ -50,6 +71,13 @@ export function loadSave(storage: Storage = localStorage): SaveGame {
       ...structuredClone(defaultSaveGame),
       ...parsed,
       player: { ...defaultSaveGame.player, ...parsed.player },
+      career: {
+        ...structuredClone(defaultSaveGame.career),
+        ...parsed.career,
+        stats: { ...defaultDriverStats, ...parsed.career?.stats },
+      },
+      vehicleUpgrades: { ...parsed.vehicleUpgrades },
+      vehiclePaint: { ...parsed.vehiclePaint },
       settings: { ...defaultSaveGame.settings, ...parsed.settings },
       activeVehicleId,
       unlockedVehicles: migratedUnlockedVehicles,

@@ -103,6 +103,7 @@ export interface Mission {
   timeLimit?: number;
   reward: {
     xp: number;
+    coins?: number;
     badge?: string;
     unlockVehicle?: string;
   };
@@ -131,6 +132,49 @@ export interface InputActions {
 }
 
 export type GraphicsQuality = "low" | "medium" | "high";
+
+export type CameraMode = "chase" | "far" | "hood" | "drone";
+
+export type UpgradeSlot = "engine" | "handling" | "nitro";
+
+export type VehicleUpgradeLevels = Record<UpgradeSlot, number>;
+
+export interface DriverStats {
+  distanceMeters: number;
+  topSpeedKmh: number;
+  coinsCollected: number;
+  nearMisses: number;
+  crashes: number;
+  bestDrift: number;
+  totalDrift: number;
+  fastTravels: number;
+}
+
+export type DailyChallengeKind = "drift_points" | "coins" | "near_misses" | "distance" | "discoveries" | "missions";
+
+export interface DailyChallenge {
+  id: string;
+  kind: DailyChallengeKind;
+  title: string;
+  target: number;
+  progress: number;
+  rewardCoins: number;
+  rewardXp: number;
+  completed: boolean;
+}
+
+export interface DailyChallengeState {
+  date: string;
+  challenges: DailyChallenge[];
+}
+
+export interface CareerState {
+  coins: number;
+  stats: DriverStats;
+  achievements: string[];
+  bestTimesMs: Record<string, number>;
+  daily?: DailyChallengeState;
+}
 
 export type OrientationMode = "portrait" | "landscape";
 
@@ -258,8 +302,11 @@ export interface SaveGame {
     missionProgress?: MissionProgress;
     discoveryDailyXpByDistrict?: Record<string, { date: string; xp: number }>;
   };
+  career: CareerState;
   activeVehicleId: string;
   unlockedVehicles: string[];
+  vehicleUpgrades: Record<string, VehicleUpgradeLevels>;
+  vehiclePaint: Record<string, string>;
   discoveredPlaceIds: string[];
   completedMissionIds: string[];
   settings: {
@@ -269,6 +316,8 @@ export interface SaveGame {
     cameraShake: boolean;
     speedEffects: boolean;
     reduceMotion: boolean;
+    soundEnabled: boolean;
+    cameraMode: CameraMode;
     units: "metric";
   };
 }

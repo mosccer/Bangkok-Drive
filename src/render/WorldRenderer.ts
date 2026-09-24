@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import type {
   ArcadeVisualSettings,
+  CameraMode,
   GhostPlayerState,
   GraphicsQuality,
   Landmark,
@@ -31,6 +32,23 @@ import {
 } from "./arcadeVisuals";
 import { getRenderQualityProfile } from "./quality";
 
+const trafficPalette = ["#ec4899", "#a3e635", "#facc15", "#f97316", "#3b82f6", "#e2e8f0", "#ef4444", "#14b8a6"];
+const trafficClasses: VehicleDefinition["class"][] = ["taxi", "taxi", "taxi", "compact", "pickup", "ev", "compact", "pickup"];
+
+function trafficDefinition(colorIndex: number): VehicleDefinition {
+  const index = Math.abs(colorIndex) % trafficPalette.length;
+  return { ...getVehicleDefinition("siam-taxi"), id: `traffic-${index}`, class: trafficClasses[index], color: trafficPalette[index] };
+}
+
+function disposeObject(object: THREE.Object3D): void {
+  object.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) return;
+    child.geometry.dispose();
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+    for (const material of materials) material.dispose();
+  });
+}
+
 export class WorldRenderer {
   readonly scene = new THREE.Scene();
   readonly camera = new THREE.PerspectiveCamera(62, 1, 0.1, 1800);
@@ -59,6 +77,15 @@ export class WorldRenderer {
   private lastSkidMark = 0;
   private arcadeVisualSettings: ArcadeVisualSettings = defaultArcadeVisualSettings;
   private cameraInitialized = false;
+  private cameraMode: CameraMode = "chase";
+  private impactShake = 0;
+  private ground?: THREE.Mesh;
+  private readonly pickupMeshes = new Map<string, THREE.Object3D>();
+  private readonly trafficMeshes = new Map<string, THREE.Group>();
+  private readonly coinGeometry = new THREE.CylinderGeometry(1.1, 1.1, 0.22, 20);
+  private readonly coinMaterial = new THREE.MeshStandardMaterial({ color: "#fbbf24", emissive: "#f59e0b", emissiveIntensity: 0.45, metalness: 0.75, roughness: 0.25 });
+  private readonly nitroGeometry = new THREE.CapsuleGeometry(0.7, 1.5, 6, 12);
+  private readonly nitroMaterial = new THREE.MeshStandardMaterial({ color: "#38bdf8", emissive: "#0ea5e9", emissiveIntensity: 0.8, metalness: 0.35, roughness: 0.2 });
 
   constructor(private readonly canvasHost: HTMLElement) {
     this.qualityProfile = getRenderQualityProfile("medium", this.isMobileViewport());
@@ -107,25 +134,94 @@ export class WorldRenderer {
 
     this.vehicle.position.set(vehicleState.position.x, vehicleState.position.y, vehicleState.position.z);
     this.vehicle.rotation.y = vehicleState.rotation;
-    const shakeOffset = this.arcadeVisualSettings.reduceMotion ? 0 : speedEffect.shake * 0.18;
+    this.impactShake = Math.max(0, this.impactShake - dt * 2.4);
+    const motionAllowed = !this.arcadeVisualSettings.reduceMotion;
+    const shakeOffset = motionAllowed ? speedEffect.shake * 0.18 + (this.arcadeVisualSettings.cameraShake ? this.impactShake * 0.9 : 0) : 0;
+    const forwardX = Math.sin(vehicleState.rotation);
+    const forwardZ = Math.cos(vehicleState.rotation);
+    const rig = this.cameraRig();
     const cameraTarget = new THREE.Vector3(
-      vehicleState.position.x - Math.sin(vehicleState.rotation) * 10,
-      7 + Math.sin(now * 0.035) * shakeOffset,
-      vehicleState.position.z - Math.cos(vehicleState.rotation) * 10,
+      vehicleState.position.x - forwardX * rig.back,
+      rig.height + Math.sin(now * 0.035) * shakeOffset,
+      vehicleState.position.z - forwardZ * rig.back,
     );
     cameraTarget.x += Math.sin(now * 0.05) * shakeOffset;
     cameraTarget.z += Math.cos(now * 0.047) * shakeOffset;
-    if (!this.cameraInitialized) {
+    if (!this.cameraInitialized || rig.snap) {
       this.camera.position.copy(cameraTarget);
       this.cameraInitialized = true;
     } else {
-      this.camera.position.lerp(cameraTarget, 0.08);
+      this.camera.position.lerp(cameraTarget, rig.follow);
     }
     this.camera.fov += (speedEffect.fov - this.camera.fov) * 0.12;
     this.camera.updateProjectionMatrix();
-    this.camera.lookAt(vehicleState.position.x, 1.1, vehicleState.position.z);
+    this.camera.lookAt(vehicleState.position.x + forwardX * rig.lookAhead, rig.lookHeight, vehicleState.position.z + forwardZ * rig.lookAhead);
+    this.followVehicle(vehicleState);
     if (!this.streamingTilesActive) {
       this.updateVisibleChunks(vehicleState.position.x, vehicleState.position.z);
+    }
+  }
+
+  setCameraMode(mode: CameraMode): void {
+    this.cameraMode = mode;
+    this.cameraInitialized = false;
+  }
+
+  triggerImpact(strength: number): void {
+    this.impactShake = Math.min(1.5, this.impactShake + strength);
+  }
+
+  setPickups(items: Array<{ id: string; kind: "coin" | "nitro"; x: number; z: number }>): void {
+    const active = new Set(items.map((item) => item.id));
+    for (const [id, mesh] of this.pickupMeshes) {
+      if (!active.has(id)) {
+        this.scene.remove(mesh);
+        this.pickupMeshes.delete(id);
+      }
+    }
+    for (const item of items) {
+      let mesh = this.pickupMeshes.get(item.id);
+      if (!mesh) {
+        mesh =
+          item.kind === "coin"
+            ? new THREE.Mesh(this.coinGeometry, this.coinMaterial)
+            : new THREE.Mesh(this.nitroGeometry, this.nitroMaterial);
+        if (item.kind === "coin") mesh.rotation.x = Math.PI / 2;
+        mesh.userData.spinPhase = (item.x + item.z) * 0.05;
+        mesh.userData.pickupKind = item.kind;
+        this.pickupMeshes.set(item.id, mesh);
+        this.scene.add(mesh);
+      }
+      mesh.position.set(item.x, item.kind === "coin" ? 1.4 : 1.6, item.z);
+    }
+  }
+
+  setTrafficCars(cars: Array<{ id: string; x: number; z: number; yaw: number; colorIndex: number; braking: boolean }>): void {
+    const active = new Set(cars.map((car) => car.id));
+    for (const [id, group] of this.trafficMeshes) {
+      if (!active.has(id)) {
+        this.scene.remove(group);
+        disposeObject(group);
+        this.trafficMeshes.delete(id);
+      }
+    }
+    for (const car of cars) {
+      let group = this.trafficMeshes.get(car.id);
+      if (!group) {
+        group = createVehicleMesh(trafficDefinition(car.colorIndex));
+        this.trafficMeshes.set(car.id, group);
+        this.scene.add(group);
+      }
+      group.position.set(car.x, 0.02, car.z);
+      group.rotation.y = car.yaw;
+      if (group.userData.braking !== car.braking) {
+        group.userData.braking = car.braking;
+        group.traverse((object) => {
+          if (object instanceof THREE.Mesh && object.userData.vehiclePart === "brakeLight") {
+            this.setEmissiveIntensity(object, car.braking ? 2.6 : 0.5);
+          }
+        });
+      }
     }
   }
 
@@ -302,12 +398,39 @@ export class WorldRenderer {
 
   render(): void {
     const t = this.clock.getElapsedTime();
-    this.scene.traverse((object) => {
-      if (object.userData.float) {
-        object.position.y = object.userData.baseY + Math.sin(t * 1.8 + object.userData.phase) * 0.25;
+    for (const marker of this.placeMarkers.values()) {
+      marker.position.y = marker.userData.baseY + Math.sin(t * 1.8 + marker.userData.phase) * 0.25;
+      marker.rotation.y = t * 0.8 + marker.userData.phase;
+    }
+    for (const mesh of this.pickupMeshes.values()) {
+      const phase = mesh.userData.spinPhase as number;
+      if (mesh.userData.pickupKind === "coin") {
+        mesh.rotation.z = t * 3 + phase;
+      } else {
+        mesh.rotation.y = t * 2 + phase;
       }
-    });
+      mesh.position.y = (mesh.userData.pickupKind === "coin" ? 1.4 : 1.6) + Math.sin(t * 3 + phase) * 0.2;
+    }
     this.renderer.render(this.scene, this.camera);
+  }
+
+  private cameraRig(): { back: number; height: number; lookAhead: number; lookHeight: number; follow: number; snap: boolean } {
+    switch (this.cameraMode) {
+      case "far":
+        return { back: 17, height: 10.5, lookAhead: 4, lookHeight: 1.2, follow: 0.07, snap: false };
+      case "hood":
+        return { back: -1.3, height: 1.75, lookAhead: 24, lookHeight: 1.4, follow: 1, snap: true };
+      case "drone":
+        return { back: 6, height: 46, lookAhead: 6, lookHeight: 0, follow: 0.12, snap: false };
+      default:
+        return { back: 10, height: 7, lookAhead: 0, lookHeight: 1.1, follow: 0.08, snap: false };
+    }
+  }
+
+  private followVehicle(vehicleState: VehicleState): void {
+    if (this.ground) {
+      this.ground.position.set(Math.round(vehicleState.position.x / 50) * 50, 0, Math.round(vehicleState.position.z / 50) * 50);
+    }
   }
 
   private updateVehicleVisuals(vehicleVisual: VehicleVisualState): void {
@@ -423,11 +546,12 @@ export class WorldRenderer {
     this.scene.add(sun);
 
     const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(1200, 1200),
+      new THREE.PlaneGeometry(2600, 2600),
       new THREE.MeshStandardMaterial({ color: "#52624d", roughness: 0.92 }),
     );
     ground.rotation.x = -Math.PI / 2;
     ground.receiveShadow = true;
+    this.ground = ground;
     this.scene.add(ground);
 
     this.addRiver();
