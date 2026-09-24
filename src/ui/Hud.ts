@@ -59,7 +59,21 @@ export interface MinimapOverlay {
   roads: Array<{ ax: number; az: number; bx: number; bz: number; width: number; kind: string }>;
   traffic: Array<{ x: number; z: number }>;
   pickups: Array<{ x: number; z: number; kind: "coin" | "nitro" }>;
+  players?: Array<{ x: number; z: number; color: string }>;
   zoom: number;
+}
+
+export interface OnlineHudState {
+  transport: "supabase" | "local" | "offline";
+  room: string;
+  name: string;
+  players: Array<{ id: string; name: string; vehicleName: string; distanceMeters: number }>;
+  race?: {
+    targetName: string;
+    status: "countdown" | "live" | "closed";
+    seconds: number;
+    results: Array<{ name: string; timeMs: number; self: boolean }>;
+  };
 }
 
 export interface MissionHudState {
@@ -144,9 +158,14 @@ export interface HudHandlers {
   onNavigate: (placeId: string) => void;
   onCancelNavigation: () => void;
   onOpenPlace: (placeId: string) => void;
+  onJoinRoom: (name: string, room: string) => void;
+  onEmote: (emote: string) => void;
+  onStartRace: () => void;
+  onJumpToPlayer: (playerId: string) => void;
+  onCopyInvite: () => void;
 }
 
-type PanelName = "garage" | "missions" | "settings" | "guide";
+type PanelName = "garage" | "missions" | "settings" | "guide" | "online";
 
 const cameraLabels: Record<CameraMode, string> = {
   chase: "Chase",
@@ -187,6 +206,9 @@ export class Hud {
   private guideSearch = "";
   private guideSort: "near" | "score" = "near";
   private guideHtml = "";
+  private onlineHtml = "";
+  private readonly onlineButton: HTMLElement;
+  private readonly countdown: HTMLElement;
   private pointerOverPanel = false;
   private readonly pauseOverlay: HTMLElement;
   private readonly minimap: HTMLCanvasElement;
@@ -223,6 +245,7 @@ export class Hud {
         <button class="menu-button" data-ui="garage-button" title="Garage (G)">Garage</button>
         <button class="menu-button" data-ui="missions-button" title="Missions (J)">Missions</button>
         <button class="menu-button" data-ui="guide-button" title="Bangkok Guide (B)">Guide</button>
+        <button class="menu-button online-button" data-ui="online-button" title="Multiplayer (O)">Online</button>
         <button class="icon-button" data-ui="settings-button" aria-label="Settings" title="Settings">⚙</button>
       </div>
       <div class="minimap-wrap">
@@ -313,6 +336,38 @@ export class Hud {
         </div>
         <div class="panel-body guide-list" data-ui="guide-list"></div>
       </aside>
+      <aside class="side-panel" data-ui="online-panel">
+        <div class="drawer-head">
+          <strong>เล่นหลายคน · Online</strong>
+          <button class="icon-button" data-close-panel aria-label="Close">x</button>
+        </div>
+        <div class="panel-body">
+          <section class="panel-section online-join">
+            <p class="online-status" data-ui="online-status">กำลังเชื่อมต่อ…</p>
+            <label>ชื่อผู้เล่น<input data-ui="online-name" maxlength="20" autocomplete="nickname" /></label>
+            <label>รหัสห้อง<input data-ui="online-room" maxlength="24" autocomplete="off" /></label>
+            <div class="guide-actions">
+              <button class="primary-button small" data-ui="online-join">เข้าห้อง</button>
+              <button class="ghost-button" data-ui="online-invite">คัดลอกลิงก์ชวนเพื่อน</button>
+            </div>
+          </section>
+          <section class="panel-section">
+            <h3>อีโมต</h3>
+            <div class="emote-row">${["👋", "🏁", "🔥", "😂", "👍", "🙏"].map((emote) => `<button data-emote="${emote}">${emote}</button>`).join("")}</div>
+          </section>
+          <section class="panel-section">
+            <h3>แข่งกับเพื่อนในห้อง</h3>
+            <p class="guide-count">สุ่มแลนด์มาร์กใกล้ๆ ทุกคนนับถอยหลังพร้อมกัน ห้ามวาร์ประหว่างแข่ง</p>
+            <button class="primary-button small" data-ui="online-race">🏁 เริ่มการแข่ง</button>
+            <div data-ui="online-race-status"></div>
+          </section>
+          <section class="panel-section">
+            <h3 data-ui="online-count">ผู้เล่นในห้อง</h3>
+            <div class="player-list" data-ui="online-players"></div>
+          </section>
+        </div>
+      </aside>
+      <div class="countdown hidden" data-ui="countdown"></div>
       <aside class="side-panel" data-ui="settings-panel">
         <div class="drawer-head">
           <strong>Settings</strong>
@@ -377,7 +432,10 @@ export class Hud {
       missions: this.mustFind("[data-ui='missions-panel']"),
       settings: this.mustFind("[data-ui='settings-panel']"),
       guide: this.mustFind("[data-ui='guide-panel']"),
+      online: this.mustFind("[data-ui='online-panel']"),
     };
+    this.onlineButton = this.mustFind("[data-ui='online-button']");
+    this.countdown = this.mustFind("[data-ui='countdown']");
     this.guideList = this.mustFind("[data-ui='guide-list']");
     this.navChip = this.mustFind("[data-ui='nav-chip']");
     this.navText = this.mustFind("[data-ui='nav-text']");
@@ -401,6 +459,19 @@ export class Hud {
     this.mustFind("[data-ui='missions-button']").addEventListener("click", () => this.togglePanel("missions"));
     this.mustFind("[data-ui='settings-button']").addEventListener("click", () => this.togglePanel("settings"));
     this.mustFind("[data-ui='guide-button']").addEventListener("click", () => this.togglePanel("guide"));
+    this.onlineButton.addEventListener("click", () => this.togglePanel("online"));
+    const nameInput = this.mustFind<HTMLInputElement>("[data-ui='online-name']");
+    const roomInput = this.mustFind<HTMLInputElement>("[data-ui='online-room']");
+    this.mustFind("[data-ui='online-join']").addEventListener("click", () => this.handlers?.onJoinRoom(nameInput.value, roomInput.value));
+    this.mustFind("[data-ui='online-invite']").addEventListener("click", () => this.handlers?.onCopyInvite());
+    this.mustFind("[data-ui='online-race']").addEventListener("click", () => this.handlers?.onStartRace());
+    for (const button of this.root.querySelectorAll<HTMLElement>("[data-emote]")) {
+      button.addEventListener("click", () => this.handlers?.onEmote(button.dataset.emote!));
+    }
+    this.mustFind("[data-ui='online-players']").addEventListener("click", (event) => {
+      const button = (event.target as HTMLElement).closest<HTMLElement>("[data-jump]");
+      if (button?.dataset.jump) this.handlers?.onJumpToPlayer(button.dataset.jump);
+    });
     this.mustFind("[data-ui='nav-cancel']").addEventListener("click", () => this.handlers?.onCancelNavigation());
     for (const tab of this.root.querySelectorAll<HTMLButtonElement>("[data-tab]")) {
       tab.addEventListener("click", () => {
@@ -586,6 +657,7 @@ export class Hud {
     for (const panel of Object.values(this.panels)) {
       panel.classList.remove("open");
     }
+    this.pointerOverPanel = false;
   }
 
   private updateMissionTimer(mission: Mission, state?: MissionHudState): void {
@@ -691,6 +763,17 @@ export class Hud {
         if (!inside(point)) continue;
         ctx.fillStyle = pickup.kind === "nitro" ? "#38bdf8" : "#fbbf24";
         ctx.fillRect(point.x - 1.5, point.y - 1.5, 3, 3);
+      }
+      for (const player of overlay.players ?? []) {
+        const point = project(player);
+        const clamped = { x: Math.max(6, Math.min(width - 6, point.x)), y: Math.max(6, Math.min(height - 6, point.y)) };
+        ctx.fillStyle = player.color;
+        ctx.strokeStyle = "#0b1220";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(clamped.x, clamped.y, 5.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
       }
       ctx.fillStyle = "#e2e8f0";
       for (const car of overlay.traffic) {
@@ -927,6 +1010,55 @@ export class Hud {
         card.append(start);
       }
       list?.append(card);
+    }
+  }
+
+  updateOnline(state: OnlineHudState, background = false): void {
+    const count = state.players.length;
+    const buttonText = count ? `Online · ${count}` : "Online";
+    if (this.onlineButton.textContent !== buttonText) this.onlineButton.textContent = buttonText;
+    const nameInput = this.mustFind<HTMLInputElement>("[data-ui='online-name']");
+    const roomInput = this.mustFind<HTMLInputElement>("[data-ui='online-room']");
+    if (document.activeElement !== nameInput && !nameInput.value) nameInput.value = state.name;
+    if (document.activeElement !== roomInput && !roomInput.value) roomInput.value = state.room;
+    if (background && this.pointerOverPanel) return;
+    const statusText =
+      state.transport === "supabase"
+        ? `🟢 ออนไลน์ · ห้อง ${state.room}`
+        : state.transport === "local"
+          ? `🟡 โหมดเครื่องเดียว (เปิดหลายแท็บ) · ห้อง ${state.room} — ตั้งค่า Supabase เพื่อเล่นผ่านอินเทอร์เน็ต`
+          : "⚪ ออฟไลน์";
+    const players = state.players
+      .map(
+        (player) => `<div class="player-row">
+          <span><strong>${escapeHtml(player.name)}</strong><small>${escapeHtml(player.vehicleName)} · ${formatDistance(Math.round(player.distanceMeters / 50) * 50)}</small></span>
+          <button class="ghost-button" data-jump="${escapeHtml(player.id)}">ไปหา</button>
+        </div>`,
+      )
+      .join("");
+    const race = state.race
+      ? `<div class="race-box">
+          <strong>🏁 ${escapeHtml(state.race.targetName)}</strong>
+          <small>${state.race.status === "countdown" ? `เริ่มใน ${Math.ceil(state.race.seconds)} วินาที` : state.race.status === "live" ? `เวลา ${formatRaceTime(state.race.seconds)}` : "จบการแข่งแล้ว"}</small>
+          <ol>${state.race.results.map((result) => `<li class="${result.self ? "self" : ""}">${escapeHtml(result.name)} · ${formatRaceTime(result.timeMs / 1000)}</li>`).join("")}</ol>
+        </div>`
+      : "";
+    const html = `${statusText}|${count}|${players}|${race}`;
+    if (html === this.onlineHtml) return;
+    this.onlineHtml = html;
+    this.mustFind("[data-ui='online-status']").textContent = statusText;
+    this.mustFind("[data-ui='online-count']").textContent = `ผู้เล่นในห้อง · ${count}`;
+    this.mustFind("[data-ui='online-players']").innerHTML = players || `<p class="guide-count">ยังไม่มีเพื่อนในห้องนี้ — ส่งลิงก์ชวนเพื่อน หรือเปิดเกมอีกแท็บเพื่อทดลอง</p>`;
+    this.mustFind("[data-ui='online-race-status']").innerHTML = race;
+  }
+
+  setCountdown(text?: string): void {
+    this.countdown.classList.toggle("hidden", !text);
+    if (text && this.countdown.textContent !== text) {
+      this.countdown.textContent = text;
+      this.countdown.classList.remove("pop");
+      void this.countdown.offsetWidth;
+      this.countdown.classList.add("pop");
     }
   }
 

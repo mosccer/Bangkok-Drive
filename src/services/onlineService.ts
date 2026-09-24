@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import type { GhostPlayerState, LeaderboardRun, PlayerProfile, SaveGame } from "../types";
+import type { LeaderboardRun, PlayerProfile, SaveGame } from "../types";
 
 export interface OnlineService {
   isConfigured(): boolean;
@@ -8,8 +8,7 @@ export interface OnlineService {
   saveCloud(profileId: string, save: SaveGame): Promise<void>;
   submitLeaderboardRun(run: LeaderboardRun): Promise<void>;
   listLeaderboard(missionId: string): Promise<LeaderboardRun[]>;
-  joinGhostChannel(chunkId: string, onGhosts: (states: GhostPlayerState[]) => void): Promise<void>;
-  trackGhost(state: GhostPlayerState): Promise<void>;
+  realtimeClient(): SupabaseClient | undefined;
 }
 
 const localProfile: PlayerProfile = {
@@ -44,19 +43,13 @@ export class OfflineOnlineService implements OnlineService {
     return [];
   }
 
-  async joinGhostChannel(): Promise<void> {
-    return;
-  }
-
-  async trackGhost(): Promise<void> {
-    return;
+  realtimeClient(): SupabaseClient | undefined {
+    return undefined;
   }
 }
 
 export class SupabaseOnlineService implements OnlineService {
   private client?: SupabaseClient;
-  private channel?: ReturnType<SupabaseClient["channel"]>;
-  private profile?: PlayerProfile;
 
   constructor(
     url = import.meta.env.VITE_SUPABASE_URL,
@@ -83,7 +76,6 @@ export class SupabaseOnlineService implements OnlineService {
       isGuest: userResult.is_anonymous ?? true,
       createdAt: userResult.created_at,
     };
-    this.profile = profile;
 
     await this.client.from("profiles").upsert({
       id: profile.id,
@@ -157,25 +149,8 @@ export class SupabaseOnlineService implements OnlineService {
     }));
   }
 
-  async joinGhostChannel(chunkId: string, onGhosts: (states: GhostPlayerState[]) => void): Promise<void> {
-    if (!this.client) return;
-    if (this.channel) {
-      await this.client.removeChannel(this.channel);
-    }
-
-    this.channel = this.client.channel(`ghosts:${chunkId}`, { config: { presence: { key: this.profile?.id ?? "guest" } } });
-    this.channel.on("presence", { event: "sync" }, () => {
-      const state = this.channel?.presenceState<GhostPlayerState>() ?? {};
-      const ghosts = Object.values(state)
-        .flat()
-        .filter((ghost) => ghost.profileId !== this.profile?.id);
-      onGhosts(ghosts);
-    });
-    await this.channel.subscribe();
-  }
-
-  async trackGhost(state: GhostPlayerState): Promise<void> {
-    await this.channel?.track(state);
+  realtimeClient(): SupabaseClient | undefined {
+    return this.client;
   }
 }
 

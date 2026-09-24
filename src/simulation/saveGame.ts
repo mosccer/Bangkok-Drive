@@ -47,6 +47,8 @@ export const defaultSaveGame: SaveGame = {
     reduceMotion: false,
     soundEnabled: true,
     cameraMode: "chase",
+    playerName: "",
+    multiplayerRoom: "bangkok",
     units: "metric",
   },
 };

@@ -7,7 +7,6 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 import type {
   ArcadeVisualSettings,
   CameraMode,
-  GhostPlayerState,
   GraphicsQuality,
   MapArea,
   OrientationMode,
@@ -55,11 +54,52 @@ function trafficDefinition(colorIndex: number): VehicleDefinition {
 
 function disposeObject(object: THREE.Object3D): void {
   object.traverse((child) => {
+    if (child instanceof THREE.Sprite) {
+      child.material.map?.dispose();
+      child.material.dispose();
+      return;
+    }
     if (!(child instanceof THREE.Mesh)) return;
     if (!child.geometry.userData.shared) child.geometry.dispose();
     const materials = Array.isArray(child.material) ? child.material : [child.material];
     for (const material of materials) material.dispose();
   });
+}
+
+// Name tags and emote bubbles: canvas text on a sprite so they always face the camera.
+function createLabelSprite(text: string, background: string, border: string, fontSize = 44): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  const font = `800 ${fontSize}px Inter, system-ui, sans-serif`;
+  const padding = 22;
+  let width = 256;
+  if (ctx) {
+    ctx.font = font;
+    width = Math.min(640, Math.ceil(ctx.measureText(text).width) + padding * 2);
+  }
+  canvas.width = width;
+  canvas.height = fontSize + padding * 1.4;
+  if (ctx) {
+    ctx.font = font;
+    ctx.fillStyle = background;
+    ctx.strokeStyle = border;
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.roundRect(3, 3, canvas.width - 6, canvas.height - 6, canvas.height / 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = background === "#0b1220" ? "#f8fafc" : "#1c1204";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 2);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true, toneMapped: false }));
+  const worldHeight = 1.1;
+  sprite.scale.set((worldHeight * canvas.width) / canvas.height, worldHeight, 1);
+  sprite.renderOrder = 10;
+  return sprite;
 }
 
 function markerColor(category: PlaceCategory): string {
@@ -78,7 +118,7 @@ export class WorldRenderer {
   private readonly timer = new THREE.Timer();
   private readonly environment: SkyEnvironment;
   private readonly roadTileGroups = new Map<string, { group: THREE.Group; tile: RoadTile }>();
-  private readonly ghostGroups = new Map<string, THREE.Group>();
+  private readonly remotePlayerGroups = new Map<string, THREE.Group>();
   private readonly placeMarkers = new Map<string, THREE.Object3D>();
   private readonly pickupMeshes = new Map<string, THREE.Object3D>();
   private readonly trafficMeshes = new Map<string, THREE.Group>();
@@ -468,26 +508,51 @@ export class WorldRenderer {
     }
   }
 
-  setGhostCars(states: GhostPlayerState[]): void {
-    const active = new Set(states.map((state) => state.profileId));
-    for (const [id, group] of this.ghostGroups) {
+  setRemotePlayers(players: Array<{ id: string; name: string; vehicleId: string; color: string; x: number; z: number; yaw: number; emote?: string }>): void {
+    const active = new Set(players.map((player) => player.id));
+    for (const [id, group] of this.remotePlayerGroups) {
       if (!active.has(id)) {
         this.scene.remove(group);
         disposeObject(group);
-        this.ghostGroups.delete(id);
+        this.remotePlayerGroups.delete(id);
       }
     }
 
-    for (const state of states) {
-      let group = this.ghostGroups.get(state.profileId);
+    for (const player of players) {
+      const key = `${player.vehicleId}|${player.color}|${player.name}`;
+      let group = this.remotePlayerGroups.get(player.id);
+      if (group && group.userData.key !== key) {
+        this.scene.remove(group);
+        disposeObject(group);
+        group = undefined;
+      }
       if (!group) {
-        group = createVehicleMesh(getVehicleDefinition(state.vehicleId), true);
-        this.ghostGroups.set(state.profileId, group);
+        group = createVehicleMesh({ ...getVehicleDefinition(player.vehicleId), color: player.color });
+        group.userData.key = key;
+        const tag = createLabelSprite(player.name, "#0b1220", "#67e8f9");
+        tag.position.set(0, 4.4, 0);
+        tag.userData.role = "nameTag";
+        group.add(tag);
+        this.remotePlayerGroups.set(player.id, group);
         this.scene.add(group);
       }
-      const local = state.lat !== undefined && state.lng !== undefined ? geoToLocal({ lat: state.lat, lng: state.lng }, this.worldAnchor) : { x: state.x, z: state.z };
-      group.position.set(local.x, 0, local.z);
-      group.rotation.y = state.yaw;
+      group.position.set(player.x, 0, player.z);
+      group.rotation.y = player.yaw;
+      const emoteKey = player.emote ?? "";
+      if (group.userData.emote !== emoteKey) {
+        group.userData.emote = emoteKey;
+        const old = group.children.find((child) => child.userData.role === "emote");
+        if (old) {
+          group.remove(old);
+          disposeObject(old);
+        }
+        if (player.emote) {
+          const bubble = createLabelSprite(player.emote, "#fef9c3", "#fde047", 96);
+          bubble.position.set(0, 7, 0);
+          bubble.userData.role = "emote";
+          group.add(bubble);
+        }
+      }
     }
   }
 

@@ -17,6 +17,7 @@ export interface UiActions {
   toggleGarage: boolean;
   toggleMissions: boolean;
   toggleGuide: boolean;
+  toggleOnline: boolean;
   horn: boolean;
 }
 
@@ -27,6 +28,7 @@ const latchKeys: Record<string, keyof Omit<UiActions, "horn">> = {
   KeyG: "toggleGarage",
   KeyJ: "toggleMissions",
   KeyB: "toggleGuide",
+  KeyO: "toggleOnline",
 };
 
 export class InputController {
@@ -70,6 +72,7 @@ export class InputController {
       toggleGarage: this.uiLatches.has("toggleGarage"),
       toggleMissions: this.uiLatches.has("toggleMissions"),
       toggleGuide: this.uiLatches.has("toggleGuide"),
+      toggleOnline: this.uiLatches.has("toggleOnline"),
       horn: this.pressed.has("KeyH") || this.touchHorn,
     };
     this.uiLatches.clear();

@@ -1,4 +1,4 @@
-import type { CameraMode, DailyChallengeKind, GhostPlayerState, Mission, PlaceQuery, PlaceSummary, PlayerProfile, RoadTile, SaveGame, UpgradeSlot, VehicleDefinition } from "../../types";
+import type { CameraMode, DailyChallengeKind, Mission, PlaceQuery, PlaceSummary, PlayerProfile, RoadTile, SaveGame, UpgradeSlot, VehicleDefinition } from "../../types";
 import { GameAudio } from "../../audio/GameAudio";
 import { bangkokWorld } from "../../data/bangkokWorld";
 import {
@@ -49,11 +49,13 @@ import { mpsToKmh } from "../../simulation/speed";
 import { TrafficSystem } from "../../simulation/traffic";
 import { applyUpgrades, getUpgradeLevels, purchaseUpgrade, upgradeLabels } from "../../simulation/upgrades";
 import { VehicleController } from "../../simulation/VehicleController";
-import { pruneStaleGhosts } from "../../simulation/ghosts";
+import { createRace, isRaceLive, placeFor, raceElapsedMs, raceReward, recordRaceResult, shouldCloseRace, type RaceState } from "../../simulation/race";
+import { RemotePlayerBuffer, sanitizePlayerName, sanitizeRoomCode, sanitizeSnapshot } from "../../simulation/remotePlayers";
+import { LocalTabTransport, sanitizeRoomEvent, SupabaseRealtimeTransport, type MultiplayerTransport, type RoomEvent } from "../../services/multiplayer";
 import { createOnlineService, type OnlineService } from "../../services/onlineService";
 import { MapStreamingService } from "../../services/MapStreamingService";
 import { CachedPlacesService, GooglePlacesProxyService, type PlacesService } from "../../services/placesService";
-import { formatDistance, Hud, MINIMAP_ZOOM_LEVELS, type MinimapOverlay, type MissionBoardEntry } from "../../ui/Hud";
+import { formatDistance, Hud, MINIMAP_ZOOM_LEVELS, type MinimapOverlay, type MissionBoardEntry, type OnlineHudState } from "../../ui/Hud";
 import { guideReviewFor } from "../../data/guideReviews";
 import { buildArcadeVisualSettings } from "../arcadeVisuals";
 import { WorldRenderer } from "../WorldRenderer";
@@ -70,6 +72,12 @@ export function parseStartParam(search: string): { lat: number; lng: number } | 
   const [lat, lng] = value.split(",").map(Number);
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < 13.4 || lat > 14.1 || lng < 100.2 || lng > 100.95) return undefined;
   return { lat, lng };
+}
+
+// Per-page identity so two tabs (or two guests sharing an account) show up as separate drivers.
+function createSessionPlayerId(): string {
+  const random = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+  return `p-${random}`;
 }
 
 export class GameApp {
@@ -95,9 +103,15 @@ export class GameApp {
   private paused = false;
   private lastTime = performance.now();
   private detailRequest?: string;
-  private currentChunkId = "real-phra-nakhon-00";
-  private ghostStates: GhostPlayerState[] = [];
-  private lastGhostTrack = 0;
+  private readonly remotePlayers = new RemotePlayerBuffer();
+  private readonly playerId = createSessionPlayerId();
+  private readonly remoteNames = new Map<string, string>();
+  private transport?: MultiplayerTransport;
+  private snapshotSeq = 0;
+  private lastSnapshotSent = 0;
+  private lastOnlineHud = 0;
+  private race?: RaceState;
+  private raceFinished = false;
   private lastCloudSave = 0;
   private lastStreamUpdate = 0;
   private streamInFlight?: Promise<void>;
@@ -153,6 +167,11 @@ export class GameApp {
       onNavigate: (placeId) => this.navigateTo(placeId),
       onCancelNavigation: () => this.clearNavigation(),
       onOpenPlace: (placeId) => void this.openPlace(placeId),
+      onJoinRoom: (name, room) => void this.joinRoom(name, room),
+      onEmote: (emote) => this.sendEmote(emote),
+      onStartRace: () => this.startRace(),
+      onJumpToPlayer: (id) => void this.jumpToPlayer(id),
+      onCopyInvite: () => void this.copyInvite(),
     });
     this.refreshPanels(true);
   }
@@ -176,7 +195,7 @@ export class GameApp {
     this.applySettings();
     this.applyVehicle(this.save.activeVehicleId);
     this.refreshPanels(true);
-    await this.joinGhostChunk(this.currentChunkId);
+    await this.joinRoom();
     this.hud.toast("Welcome to Bangkok", "Shift = nitro · Space = drift · J = missions", "info");
     this.running = true;
     requestAnimationFrame(this.tick);
@@ -236,9 +255,14 @@ export class GameApp {
     const activeMission = this.getActiveMission();
     const progress = ensureMissionProgress(this.save, activeMission);
     const missionStop = activeWaypoint(activeMission, progress, this.places);
-    const waypoint = this.guideTarget ?? missionStop;
+    const raceTarget = this.race && this.race.closedAt === undefined ? this.places.find((place) => place.id === this.race?.targetId) : undefined;
+    const waypoint = raceTarget ?? this.guideTarget ?? missionStop;
     const waypointLocal = waypoint ? geoToLocal(waypoint, this.worldAnchor) : undefined;
-    this.updateNavigation(waypointLocal);
+    if (raceTarget) {
+      this.updateRace(time, raceTarget);
+    } else {
+      this.updateNavigation(waypointLocal);
+    }
     if (this.hud.isPanelOpen("guide") && time - this.lastGuideRefresh > 1500) {
       this.refreshGuide(true);
     }
@@ -255,7 +279,7 @@ export class GameApp {
     this.updateFastTravelPrompt(waypoint);
     this.renderer.setVisiblePlaces(this.visiblePlaces);
     this.renderer.setActiveWaypoint(waypoint);
-    this.renderer.setGhostCars(pruneStaleGhosts(this.ghostStates, performance.now()));
+    this.updateMultiplayer(time);
     if (this.panelsDirty && time - this.lastPanelRefresh > 1000 && !this.hud.isPointerOverPanel()) {
       this.refreshPanels();
     }
@@ -278,6 +302,7 @@ export class GameApp {
     if (ui.toggleGarage) this.hud.togglePanel("garage");
     if (ui.toggleMissions) this.hud.togglePanel("missions");
     if (ui.toggleGuide) this.hud.togglePanel("guide");
+    if (ui.toggleOnline) this.hud.togglePanel("online");
     if (ui.zoomMinimap) {
       this.minimapZoomIndex = (this.minimapZoomIndex + 1) % MINIMAP_ZOOM_LEVELS.length;
       this.hud.setMinimapZoomLabel(this.minimapZoomIndex);
@@ -401,6 +426,11 @@ export class GameApp {
   }
 
   private clearNavigation(): void {
+    if (this.race && this.race.closedAt === undefined) {
+      this.race = { ...this.race, closedAt: performance.now() };
+      this.hud.setCountdown(undefined);
+      this.hud.toast("ออกจากการแข่งแล้ว", "", "info");
+    }
     this.guideTarget = undefined;
     this.hud.setNavigation(undefined);
   }
@@ -764,45 +794,236 @@ export class GameApp {
       roads: this.minimapRoads,
       traffic: this.traffic.cars.map((car) => worldMetersToLocal(car, this.worldAnchor)),
       pickups: this.visiblePickups.map((item) => ({ kind: item.kind, ...worldMetersToLocal(item, this.worldAnchor) })),
+      players: this.remotePlayers.views(performance.now()).map((view) => ({ color: view.color, ...geoToLocal(view, this.worldAnchor) })),
       zoom: MINIMAP_ZOOM_LEVELS[this.minimapZoomIndex],
     };
   }
 
   private async tickOnline(time: number): Promise<void> {
     if (!this.profile) return;
-    const chunkId = this.currentChunkId;
-
-    if (time - this.lastGhostTrack > 1500) {
-      this.lastGhostTrack = time;
-      const geo = localToGeo(this.vehicle.state.position, this.worldAnchor);
-      await this.online.trackGhost({
-        profileId: this.profile.id,
-        displayName: this.profile.displayName,
-        vehicleId: this.save.activeVehicleId,
-        chunkId,
-        x: this.vehicle.state.position.x,
-        z: this.vehicle.state.position.z,
-        lat: geo.lat,
-        lng: geo.lng,
-        tileId: chunkId,
-        originVersion: this.worldAnchor.version,
-        yaw: this.vehicle.state.rotation,
-        speed: this.vehicle.state.speed,
-        updatedAt: Date.now(),
-      });
-    }
-
     if (time - this.lastCloudSave > 10000) {
       this.lastCloudSave = time;
       await this.online.saveCloud(this.profile.id, this.save);
     }
   }
 
-  private async joinGhostChunk(chunkId: string): Promise<void> {
-    this.currentChunkId = chunkId;
-    await this.online.joinGhostChannel(chunkId, (states) => {
-      this.ghostStates = states;
+  private async joinRoom(name?: string, room?: string): Promise<void> {
+    const params = new URLSearchParams(window.location.search);
+    const playerName = sanitizePlayerName(name ?? this.save.settings.playerName, `Driver ${this.playerId.slice(-4).toUpperCase()}`);
+    const roomCode = sanitizeRoomCode(room ?? params.get("room") ?? this.save.settings.multiplayerRoom);
+    if (playerName !== this.save.settings.playerName || roomCode !== this.save.settings.multiplayerRoom) {
+      this.commitSave({ ...this.save, settings: { ...this.save.settings, playerName, multiplayerRoom: roomCode } });
+    }
+    const client = this.online.realtimeClient();
+    this.transport ??= client ? new SupabaseRealtimeTransport(client) : new LocalTabTransport();
+    for (const id of this.remotePlayers.ids()) this.remotePlayers.remove(id);
+    await this.transport.join(roomCode, { id: this.playerId, name: playerName }, {
+      onSnapshot: (raw) => {
+        const snapshot = sanitizeSnapshot(raw);
+        if (!snapshot || snapshot.id === this.playerId) return;
+        if (!this.remoteNames.has(snapshot.id)) this.remoteNames.set(snapshot.id, snapshot.name);
+        this.remotePlayers.push(snapshot, performance.now());
+      },
+      onEvent: (raw) => {
+        const event = sanitizeRoomEvent(raw);
+        if (event && event.from !== this.playerId) this.handleRoomEvent(event);
+      },
+      onJoin: (id, joinedName) => {
+        if (id === this.playerId) return;
+        this.remoteNames.set(id, sanitizePlayerName(joinedName));
+        this.hud.toast(`${sanitizePlayerName(joinedName)} เข้าห้องแล้ว`, "กด O เพื่อดูผู้เล่น", "info");
+      },
+      onLeave: (id) => {
+        const leftName = this.remoteNames.get(id);
+        this.remotePlayers.remove(id);
+        this.remoteNames.delete(id);
+        if (leftName) this.hud.toast(`${leftName} ออกจากห้อง`, "", "info");
+      },
     });
+    if (name !== undefined || room !== undefined) {
+      this.hud.toast(`เข้าห้อง ${roomCode}`, this.transport.kind === "supabase" ? "ออนไลน์ผ่าน Supabase" : "โหมดเครื่องเดียว: เปิดเกมอีกแท็บเพื่อเล่นด้วยกัน", "info");
+    }
+    this.lastOnlineHud = 0;
+  }
+
+  private updateMultiplayer(time: number): void {
+    if (this.transport && time - this.lastSnapshotSent > 140) {
+      this.lastSnapshotSent = time;
+      const geo = localToGeo(this.vehicle.state.position, this.worldAnchor);
+      this.transport.sendSnapshot({
+        id: this.playerId,
+        name: this.save.settings.playerName,
+        vehicleId: this.save.activeVehicleId,
+        color: this.save.vehiclePaint[this.save.activeVehicleId] ?? getVehicleDefinition(this.save.activeVehicleId).color,
+        lat: geo.lat,
+        lng: geo.lng,
+        yaw: this.vehicle.state.rotation,
+        speed: this.vehicle.state.speed,
+        seq: this.snapshotSeq++,
+      });
+    }
+    const views = this.remotePlayers.views(time);
+    this.renderer.setRemotePlayers(
+      views.map((view) => ({ ...view, ...geoToLocal(view, this.worldAnchor), emote: view.emote?.text })),
+    );
+    if (time - this.lastOnlineHud > 800) {
+      this.lastOnlineHud = time;
+      this.hud.updateOnline(this.onlineHudState(time), true);
+    }
+  }
+
+  private onlineHudState(time: number): OnlineHudState {
+    const here = localToGeo(this.vehicle.state.position, this.worldAnchor);
+    const race = this.race;
+    const target = race ? this.places.find((place) => place.id === race.targetId) : undefined;
+    return {
+      transport: this.transport?.kind ?? "offline",
+      room: this.save.settings.multiplayerRoom,
+      name: this.save.settings.playerName,
+      players: this.remotePlayers
+        .views(time)
+        .map((view) => ({
+          id: view.id,
+          name: view.name,
+          vehicleName: `${getVehicleDefinition(view.vehicleId).brand} ${getVehicleDefinition(view.vehicleId).model}`,
+          distanceMeters: distanceMetersBetweenGeo(here, view),
+        }))
+        .sort((a, b) => a.distanceMeters - b.distanceMeters),
+      race:
+        race && target
+          ? {
+              targetName: placeDisplayName(target),
+              status: race.closedAt !== undefined ? "closed" : time < race.startsAt ? "countdown" : "live",
+              seconds: time < race.startsAt ? (race.startsAt - time) / 1000 : raceElapsedMs(race, time) / 1000,
+              results: race.results.map((result) => ({ name: result.name, timeMs: result.timeMs, self: result.playerId === this.playerId })),
+            }
+          : undefined,
+    };
+  }
+
+  private handleRoomEvent(event: RoomEvent): void {
+    if (event.kind === "emote") {
+      this.remotePlayers.setEmote(event.from, event.emote, performance.now() + 3500);
+      this.hud.toast(`${sanitizePlayerName(event.name)} ${event.emote}`, "", "info");
+      return;
+    }
+    if (event.kind === "race_start") {
+      this.beginRace(event.raceId, event.targetId, sanitizePlayerName(event.name), event.countdownMs);
+      return;
+    }
+    if (event.kind === "race_finish" && this.race?.raceId === event.raceId) {
+      this.race = recordRaceResult(this.race, { playerId: event.from, name: sanitizePlayerName(event.name), timeMs: event.timeMs });
+      const place = placeFor(this.race, event.from);
+      this.hud.toast(`🏁 ${sanitizePlayerName(event.name)} เข้าเส้นชัยอันดับ ${place}`, formatRaceTime(event.timeMs / 1000), "info");
+      this.lastOnlineHud = 0;
+    }
+  }
+
+  private sendEmote(emote: string): void {
+    this.transport?.sendEvent({ kind: "emote", from: this.playerId, name: this.save.settings.playerName, emote });
+    this.hud.toast(`คุณส่ง ${emote}`, this.remotePlayers.ids().length ? "" : "ยังไม่มีเพื่อนในห้อง", "info");
+  }
+
+  private startRace(): void {
+    if (this.race && this.race.closedAt === undefined) {
+      this.hud.toast("มีการแข่งอยู่แล้ว", "รอให้จบก่อนเริ่มใหม่", "warning");
+      return;
+    }
+    const here = localToGeo(this.vehicle.state.position, this.worldAnchor);
+    const candidates = this.places
+      .filter((place) => place.source === "curated")
+      .map((place) => ({ place, distance: distanceMetersBetweenGeo(here, place) }))
+      .filter(({ distance }) => distance >= 900 && distance <= 3_000);
+    const pool = candidates.length
+      ? candidates
+      : this.places
+          .filter((place) => place.source === "curated")
+          .map((place) => ({ place, distance: distanceMetersBetweenGeo(here, place) }))
+          .filter(({ distance }) => distance >= 400)
+          .sort((a, b) => a.distance - b.distance)
+          .slice(0, 5);
+    const pick = pool[Math.floor(Math.random() * pool.length)];
+    if (!pick) {
+      this.hud.toast("ไม่พบจุดหมายสำหรับแข่ง", "ลองขับไปย่านอื่นก่อน", "warning");
+      return;
+    }
+    const raceId = `${this.playerId}-${Date.now()}`;
+    const countdownMs = 5_000;
+    this.transport?.sendEvent({ kind: "race_start", from: this.playerId, name: this.save.settings.playerName, raceId, targetId: pick.place.id, countdownMs });
+    this.beginRace(raceId, pick.place.id, this.save.settings.playerName, countdownMs);
+  }
+
+  private beginRace(raceId: string, targetId: string, hostName: string, countdownMs: number): void {
+    if (this.race && this.race.closedAt === undefined && this.race.raceId !== raceId) return;
+    const target = this.places.find((place) => place.id === targetId);
+    if (!target) return;
+    this.race = createRace(raceId, targetId, hostName, performance.now(), countdownMs);
+    this.raceFinished = false;
+    this.guideTarget = undefined;
+    this.hud.closePanels();
+    this.hud.toast(`🏁 ${hostName} ท้าแข่งไป ${placeDisplayName(target)}`, `เริ่มใน ${Math.round(countdownMs / 1000)} วินาที · ห้ามวาร์ป`, "warning");
+    this.lastOnlineHud = 0;
+  }
+
+  private updateRace(time: number, target: PlaceSummary): void {
+    const race = this.race;
+    if (!race) return;
+    if (time < race.startsAt) {
+      this.hud.setCountdown(String(Math.ceil((race.startsAt - time) / 1000)));
+    } else if (time - race.startsAt < 900) {
+      this.hud.setCountdown("GO!");
+    } else {
+      this.hud.setCountdown(undefined);
+    }
+    const here = localToGeo(this.vehicle.state.position, this.worldAnchor);
+    const elapsed = raceElapsedMs(race, time);
+    this.hud.setNavigation(`🏁 ${placeDisplayName(target)} · ${formatDistance(distanceMetersBetweenGeo(here, target))} · ${formatRaceTime(elapsed / 1000)}`);
+
+    const local = geoToLocal(target, this.worldAnchor);
+    const arrived = Math.hypot(local.x - this.vehicle.state.position.x, local.z - this.vehicle.state.position.z) < WAYPOINT_RADIUS_METERS;
+    if (isRaceLive(race, time) && arrived && !this.raceFinished) {
+      this.raceFinished = true;
+      const name = this.save.settings.playerName;
+      this.race = recordRaceResult(race, { playerId: this.playerId, name, timeMs: elapsed });
+      this.transport?.sendEvent({ kind: "race_finish", from: this.playerId, name, raceId: race.raceId, timeMs: elapsed });
+      const place = placeFor(this.race, this.playerId);
+      const reward = raceReward(place);
+      this.hud.toast(`🏁 เข้าเส้นชัยอันดับ ${place}!`, `${formatRaceTime(elapsed / 1000)} · +${reward.xp} XP · ฿ ${reward.coins}`, "reward");
+      this.audio.playMissionComplete();
+      this.commitSave(addRewards(this.save, reward));
+      this.lastOnlineHud = 0;
+    }
+
+    if (this.race && shouldCloseRace(this.race, time)) {
+      this.race = { ...this.race, closedAt: time };
+      const podium = this.race.results.slice(0, 3).map((result, index) => `${index + 1}. ${result.name}`).join("  ");
+      this.hud.toast("การแข่งจบแล้ว", podium || "ไม่มีใครเข้าเส้นชัย", "info");
+      this.hud.setCountdown(undefined);
+      this.hud.setNavigation(undefined);
+      this.lastOnlineHud = 0;
+    }
+  }
+
+  private async jumpToPlayer(playerId: string): Promise<void> {
+    if (this.race && this.race.closedAt === undefined) {
+      this.hud.toast("ห้ามวาร์ประหว่างแข่ง", "", "warning");
+      return;
+    }
+    const snapshot = this.remotePlayers.latest(playerId);
+    if (!snapshot) return;
+    this.hud.closePanels();
+    await this.fastTravelTo({ target: { lat: snapshot.lat, lng: snapshot.lng } }, snapshot.yaw);
+    this.hud.toast(`วาร์ปไปหา ${snapshot.name}`, "", "info");
+  }
+
+  private async copyInvite(): Promise<void> {
+    const url = `${window.location.origin}${window.location.pathname}?room=${encodeURIComponent(this.save.settings.multiplayerRoom)}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      this.hud.toast("คัดลอกลิงก์แล้ว", url, "reward");
+    } catch {
+      this.hud.toast("ลิงก์ชวนเพื่อน", url, "info");
+    }
   }
 
   private async setPlaceFilters(query: PlaceQuery): Promise<void> {
@@ -874,15 +1095,6 @@ export class GameApp {
       const isMobile = this.isMobileViewport();
       const vehicleWorldMeters = localToWorldMeters(this.vehicle.state.position, this.worldAnchor);
       const state = await this.mapStreaming.update(this.worldAnchor, vehicleWorldMeters, isMobile);
-      const nextChunkId = state.activeTileId ?? this.currentChunkId;
-      if (nextChunkId !== this.currentChunkId) {
-        this.currentChunkId = nextChunkId;
-        if (this.profile) {
-          await this.joinGhostChunk(nextChunkId);
-        }
-      } else {
-        this.currentChunkId = nextChunkId;
-      }
       this.renderer.setWorldOriginOffset(this.worldAnchor);
       this.renderer.setVisibleRoadTiles(state.loadedTiles);
       this.physics.setRoadTiles(state.loadedTiles, this.worldAnchor);
@@ -955,7 +1167,7 @@ export class GameApp {
   }
 
   private updateFastTravelPrompt(waypoint?: PlaceSummary): void {
-    if (!waypoint) {
+    if (!waypoint || (this.race && this.race.closedAt === undefined)) {
       this.hud.updateFastTravel(undefined, undefined);
       return;
     }
@@ -969,14 +1181,14 @@ export class GameApp {
     this.hud.updateFastTravel(fastTravelPoint, () => void this.fastTravelTo(fastTravelPoint), this.missionTimer ? FAST_TRAVEL_PENALTY_SECONDS : 0);
   }
 
-  private async fastTravelTo(point: { target: { lat: number; lng: number } }): Promise<void> {
+  private async fastTravelTo(point: { target: { lat: number; lng: number } }, yaw = this.vehicle.state.rotation): Promise<void> {
     if (this.missionTimer) {
       this.missionTimer = addMissionPenalty(this.missionTimer, FAST_TRAVEL_PENALTY_SECONDS);
       this.hud.toast("Fast travel penalty", `+${FAST_TRAVEL_PENALTY_SECONDS}s on the clock`, "warning");
     }
     this.commitSave(addStat(this.save, "fastTravels", 1));
     this.worldAnchor = createWorldAnchor(point.target, this.worldAnchor.version + 1);
-    this.vehicle.teleportLocal(0, 0, this.vehicle.state.rotation, 0);
+    this.vehicle.teleportLocal(0, 0, yaw, 0);
     this.renderer.setWorldOriginOffset(this.worldAnchor);
     this.physics.clearRoadTiles();
     this.traffic.clear();

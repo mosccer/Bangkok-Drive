@@ -337,6 +337,8 @@ export interface SaveGame {
     reduceMotion: boolean;
     soundEnabled: boolean;
     cameraMode: CameraMode;
+    playerName: string;
+    multiplayerRoom: string;
     units: "metric";
   };
 }
