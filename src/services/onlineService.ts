@@ -1,5 +1,5 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import type { GhostPlayerState, LeaderboardRun, PlayerProfile, SaveGame } from "../types";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { LeaderboardRun, PlayerProfile, SaveGame } from "../types";
 
 export interface OnlineService {
   isConfigured(): boolean;
@@ -8,8 +8,7 @@ export interface OnlineService {
   saveCloud(profileId: string, save: SaveGame): Promise<void>;
   submitLeaderboardRun(run: LeaderboardRun): Promise<void>;
   listLeaderboard(missionId: string): Promise<LeaderboardRun[]>;
-  joinGhostChannel(chunkId: string, onGhosts: (states: GhostPlayerState[]) => void): Promise<void>;
-  trackGhost(state: GhostPlayerState): Promise<void>;
+  realtimeClient(): Promise<SupabaseClient | undefined>;
 }
 
 const localProfile: PlayerProfile = {
@@ -44,37 +43,37 @@ export class OfflineOnlineService implements OnlineService {
     return [];
   }
 
-  async joinGhostChannel(): Promise<void> {
-    return;
-  }
-
-  async trackGhost(): Promise<void> {
-    return;
+  async realtimeClient(): Promise<SupabaseClient | undefined> {
+    return undefined;
   }
 }
 
+// supabase-js is only downloaded when the project is configured for online play.
 export class SupabaseOnlineService implements OnlineService {
-  private client?: SupabaseClient;
-  private channel?: ReturnType<SupabaseClient["channel"]>;
-  private profile?: PlayerProfile;
+  private clientPromise?: Promise<SupabaseClient>;
 
   constructor(
-    url = import.meta.env.VITE_SUPABASE_URL,
-    publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-  ) {
-    if (url && publishableKey) {
-      this.client = createClient(url, publishableKey);
-    }
-  }
+    private readonly url = import.meta.env.VITE_SUPABASE_URL,
+    private readonly publishableKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+  ) {}
 
   isConfigured(): boolean {
-    return Boolean(this.client);
+    return Boolean(this.url && this.publishableKey);
+  }
+
+  private async getClient(): Promise<SupabaseClient | undefined> {
+    if (!this.url || !this.publishableKey) return undefined;
+    const url = this.url;
+    const key = this.publishableKey;
+    this.clientPromise ??= import("@supabase/supabase-js").then(({ createClient }) => createClient(url, key));
+    return this.clientPromise;
   }
 
   async ensureProfile(): Promise<PlayerProfile> {
-    if (!this.client) return localProfile;
-    const session = await this.client.auth.getSession();
-    const userResult = session.data.session?.user ?? (await this.client.auth.signInAnonymously()).data.user;
+    const client = await this.getClient();
+    if (!client) return localProfile;
+    const session = await client.auth.getSession();
+    const userResult = session.data.session?.user ?? (await client.auth.signInAnonymously()).data.user;
     if (!userResult) return localProfile;
 
     const profile: PlayerProfile = {
@@ -83,9 +82,8 @@ export class SupabaseOnlineService implements OnlineService {
       isGuest: userResult.is_anonymous ?? true,
       createdAt: userResult.created_at,
     };
-    this.profile = profile;
 
-    await this.client.from("profiles").upsert({
+    await client.from("profiles").upsert({
       id: profile.id,
       display_name: profile.displayName,
       is_guest: profile.isGuest,
@@ -96,8 +94,9 @@ export class SupabaseOnlineService implements OnlineService {
   }
 
   async loadCloudSave(profileId: string): Promise<Partial<SaveGame> | undefined> {
-    if (!this.client) return undefined;
-    const { data } = await this.client.from("cloud_saves").select("*").eq("profile_id", profileId).maybeSingle();
+    const client = await this.getClient();
+    if (!client) return undefined;
+    const { data } = await client.from("cloud_saves").select("*").eq("profile_id", profileId).maybeSingle();
     if (!data) return undefined;
     return {
       activeVehicleId: data.active_vehicle_id,
@@ -114,8 +113,9 @@ export class SupabaseOnlineService implements OnlineService {
   }
 
   async saveCloud(profileId: string, save: SaveGame): Promise<void> {
-    if (!this.client) return;
-    await this.client.from("cloud_saves").upsert({
+    const client = await this.getClient();
+    if (!client) return;
+    await client.from("cloud_saves").upsert({
       profile_id: profileId,
       xp: save.player.xp,
       badges: save.player.badges,
@@ -130,8 +130,9 @@ export class SupabaseOnlineService implements OnlineService {
   }
 
   async submitLeaderboardRun(run: LeaderboardRun): Promise<void> {
-    if (!this.client) return;
-    await this.client.from("leaderboard_runs").insert({
+    const client = await this.getClient();
+    if (!client) return;
+    await client.from("leaderboard_runs").insert({
       mission_id: run.missionId,
       profile_id: run.profileId,
       vehicle_id: run.vehicleId,
@@ -141,8 +142,9 @@ export class SupabaseOnlineService implements OnlineService {
   }
 
   async listLeaderboard(missionId: string): Promise<LeaderboardRun[]> {
-    if (!this.client) return [];
-    const { data } = await this.client
+    const client = await this.getClient();
+    if (!client) return [];
+    const { data } = await client
       .from("leaderboard_runs")
       .select("mission_id, profile_id, vehicle_id, time_ms, created_at")
       .eq("mission_id", missionId)
@@ -157,25 +159,8 @@ export class SupabaseOnlineService implements OnlineService {
     }));
   }
 
-  async joinGhostChannel(chunkId: string, onGhosts: (states: GhostPlayerState[]) => void): Promise<void> {
-    if (!this.client) return;
-    if (this.channel) {
-      await this.client.removeChannel(this.channel);
-    }
-
-    this.channel = this.client.channel(`ghosts:${chunkId}`, { config: { presence: { key: this.profile?.id ?? "guest" } } });
-    this.channel.on("presence", { event: "sync" }, () => {
-      const state = this.channel?.presenceState<GhostPlayerState>() ?? {};
-      const ghosts = Object.values(state)
-        .flat()
-        .filter((ghost) => ghost.profileId !== this.profile?.id);
-      onGhosts(ghosts);
-    });
-    await this.channel.subscribe();
-  }
-
-  async trackGhost(state: GhostPlayerState): Promise<void> {
-    await this.channel?.track(state);
+  realtimeClient(): Promise<SupabaseClient | undefined> {
+    return this.getClient();
   }
 }
 

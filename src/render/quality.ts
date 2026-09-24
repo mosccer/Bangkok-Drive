@@ -14,6 +14,7 @@ export function getRenderQualityProfile(quality: GraphicsQuality, mobile = false
       useBoostTrails: false,
       useSkidMarks: false,
       useEnhancedMaterials: false,
+      useShadows: false,
     };
   }
 
@@ -30,6 +31,7 @@ export function getRenderQualityProfile(quality: GraphicsQuality, mobile = false
       useBoostTrails: true,
       useSkidMarks: true,
       useEnhancedMaterials: false,
+      useShadows: false,
     };
   }
 
@@ -46,6 +48,7 @@ export function getRenderQualityProfile(quality: GraphicsQuality, mobile = false
       useBoostTrails: true,
       useSkidMarks: true,
       useEnhancedMaterials: true,
+      useShadows: true,
     };
   }
 
@@ -61,5 +64,6 @@ export function getRenderQualityProfile(quality: GraphicsQuality, mobile = false
     useBoostTrails: true,
     useSkidMarks: true,
     useEnhancedMaterials: true,
+    useShadows: true,
   };
 }

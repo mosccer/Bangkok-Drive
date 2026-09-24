@@ -1,5 +1,5 @@
 import type { GeoPoint, RoadSegment, RoadTile, RoadTileManifest } from "../types";
-import { latLngToWorld } from "./coordinates";
+import { latLngToWorld, MAP_SCALE } from "./coordinates";
 
 const TILE_SIZE_METERS = 512;
 const GENERATED_AT = "2026-05-30T00:00:00.000+07:00";
@@ -279,11 +279,11 @@ const seeds: TileSeed[] = [
 ];
 
 function buildTile(seed: TileSeed): RoadTile {
-  const center = latLngToWorld(seed.center.lat, seed.center.lng, 1);
+  const center = latLngToWorld(seed.center.lat, seed.center.lng);
   const nodes: RoadTile["nodes"] = [];
   const segments: RoadTile["segments"] = [];
   const allPoints = seed.roads.flatMap((road) => road.points);
-  const projected = allPoints.map((point) => latLngToWorld(point.lat, point.lng, 1));
+  const projected = allPoints.map((point) => latLngToWorld(point.lat, point.lng));
   const minX = Math.min(center.x - TILE_SIZE_METERS / 2, ...projected.map((point) => point.x));
   const maxX = Math.max(center.x + TILE_SIZE_METERS / 2, ...projected.map((point) => point.x));
   const minZ = Math.min(center.z - TILE_SIZE_METERS / 2, ...projected.map((point) => point.z));
@@ -292,7 +292,7 @@ function buildTile(seed: TileSeed): RoadTile {
   for (const road of seed.roads) {
     let previousNodeId: string | undefined;
     road.points.forEach((point, pointIndex) => {
-      const meters = latLngToWorld(point.lat, point.lng, 1);
+      const meters = latLngToWorld(point.lat, point.lng);
       const nodeId = `${seed.id}-${road.id}-n${pointIndex}`;
       nodes.push({ id: nodeId, x: meters.x, z: meters.z });
       if (previousNodeId) {
@@ -332,6 +332,8 @@ export const fallbackRoadTileManifest: RoadTileManifest = {
   scaleMode: "real_1_1",
   tileSizeMeters: TILE_SIZE_METERS,
   generatedAt: GENERATED_AT,
+  source: "fallback",
+  mapScale: MAP_SCALE,
   tiles: fallbackRoadTiles.map((tile) => ({
     id: tile.id,
     href: `/data/road-tiles/${tile.id}.json`,

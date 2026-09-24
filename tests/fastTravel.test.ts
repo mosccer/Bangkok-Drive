@@ -21,3 +21,14 @@ describe("fast travel", () => {
     expect(shouldOfferFastTravel(from, { lat: grandPalace!.lat, lng: grandPalace!.lng })).toBe(false);
   });
 });
+
+import { parseStartParam } from "../src/render/app/GameApp";
+
+describe("start location parameter", () => {
+  it("accepts Bangkok coordinates and rejects anything else", () => {
+    expect(parseStartParam("?start=13.7405,100.4995")).toEqual({ lat: 13.7405, lng: 100.4995 });
+    expect(parseStartParam("?start=51.5,-0.12")).toBeUndefined();
+    expect(parseStartParam("?start=abc")).toBeUndefined();
+    expect(parseStartParam("")).toBeUndefined();
+  });
+});

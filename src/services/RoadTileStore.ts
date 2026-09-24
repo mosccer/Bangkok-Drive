@@ -1,8 +1,11 @@
-import type { RoadTile, RoadTileManifest } from "../types";
+import type { MapArea, PlaceSummary, RoadTile, RoadTileManifest } from "../types";
+import { fallbackMapAreas } from "../data/fallbackMapAreas";
 import { fallbackRoadTileManifest, fallbackRoadTiles } from "../data/roadTileFixtures";
 
 export class RoadTileStore {
   private manifest?: RoadTileManifest;
+  private areas?: Promise<MapArea[]>;
+  private places?: Promise<PlaceSummary[]>;
   private readonly cache = new Map<string, RoadTile>();
 
   constructor(private readonly manifestUrl = "/data/road-tiles/index.json") {
@@ -43,5 +46,36 @@ export class RoadTileStore {
     } catch {
       return undefined;
     }
+  }
+
+  // Water and park polygons span many tiles, so they are stored once for the whole map.
+  loadAreas(): Promise<MapArea[]> {
+    this.areas ??= this.loadManifest().then(async (manifest) => {
+      if (!manifest.areasHref) return fallbackMapAreas;
+      try {
+        const response = await fetch(manifest.areasHref);
+        if (!response.ok) throw new Error(`Map areas failed: ${response.status}`);
+        const payload = (await response.json()) as { areas?: MapArea[] };
+        return payload.areas?.length ? payload.areas : fallbackMapAreas;
+      } catch {
+        return fallbackMapAreas;
+      }
+    });
+    return this.areas;
+  }
+
+  loadOsmPlaces(): Promise<PlaceSummary[]> {
+    this.places ??= this.loadManifest().then(async (manifest) => {
+      if (!manifest.placesHref) return [];
+      try {
+        const response = await fetch(manifest.placesHref);
+        if (!response.ok) throw new Error(`OSM places failed: ${response.status}`);
+        const payload = (await response.json()) as { places?: PlaceSummary[] };
+        return payload.places ?? [];
+      } catch {
+        return [];
+      }
+    });
+    return this.places;
   }
 }

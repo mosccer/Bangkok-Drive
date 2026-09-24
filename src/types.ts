@@ -37,6 +37,23 @@ export interface PlaceSummary {
   tags: string[];
 }
 
+export interface GuideReview {
+  score: number;
+  summaryTh: string;
+  summaryEn: string;
+  highlights: string[];
+  tipTh: string;
+  bestTime: string;
+}
+
+export interface UserReview {
+  authorName: string;
+  authorUri?: string;
+  rating?: number;
+  text: string;
+  relativeTime?: string;
+}
+
 export interface PlaceDetail extends PlaceSummary {
   addressTh?: string;
   addressEn?: string;
@@ -52,6 +69,8 @@ export interface PlaceDetail extends PlaceSummary {
     provider: string;
     providerUri?: string;
   }>;
+  guideReview?: GuideReview;
+  userReviews?: UserReview[];
 }
 
 export interface PlaceQuery {
@@ -103,6 +122,7 @@ export interface Mission {
   timeLimit?: number;
   reward: {
     xp: number;
+    coins?: number;
     badge?: string;
     unlockVehicle?: string;
   };
@@ -128,9 +148,54 @@ export interface InputActions {
   handbrake: boolean;
   boost: boolean;
   pause: boolean;
+  // Analog steering from touch (-1..1, positive = left). Keyboard input leaves it undefined.
+  steerAxis?: number;
 }
 
 export type GraphicsQuality = "low" | "medium" | "high";
+
+export type CameraMode = "chase" | "far" | "hood" | "drone";
+
+export type UpgradeSlot = "engine" | "handling" | "nitro";
+
+export type VehicleUpgradeLevels = Record<UpgradeSlot, number>;
+
+export interface DriverStats {
+  distanceMeters: number;
+  topSpeedKmh: number;
+  coinsCollected: number;
+  nearMisses: number;
+  crashes: number;
+  bestDrift: number;
+  totalDrift: number;
+  fastTravels: number;
+}
+
+export type DailyChallengeKind = "drift_points" | "coins" | "near_misses" | "distance" | "discoveries" | "missions";
+
+export interface DailyChallenge {
+  id: string;
+  kind: DailyChallengeKind;
+  title: string;
+  target: number;
+  progress: number;
+  rewardCoins: number;
+  rewardXp: number;
+  completed: boolean;
+}
+
+export interface DailyChallengeState {
+  date: string;
+  challenges: DailyChallenge[];
+}
+
+export interface CareerState {
+  coins: number;
+  stats: DriverStats;
+  achievements: string[];
+  bestTimesMs: Record<string, number>;
+  daily?: DailyChallengeState;
+}
 
 export type OrientationMode = "portrait" | "landscape";
 
@@ -155,6 +220,7 @@ export interface RenderQualityProfile {
   useBoostTrails: boolean;
   useSkidMarks: boolean;
   useEnhancedMaterials: boolean;
+  useShadows: boolean;
 }
 
 export interface VehicleVisualState {
@@ -258,8 +324,11 @@ export interface SaveGame {
     missionProgress?: MissionProgress;
     discoveryDailyXpByDistrict?: Record<string, { date: string; xp: number }>;
   };
+  career: CareerState;
   activeVehicleId: string;
   unlockedVehicles: string[];
+  vehicleUpgrades: Record<string, VehicleUpgradeLevels>;
+  vehiclePaint: Record<string, string>;
   discoveredPlaceIds: string[];
   completedMissionIds: string[];
   settings: {
@@ -269,6 +338,10 @@ export interface SaveGame {
     cameraShake: boolean;
     speedEffects: boolean;
     reduceMotion: boolean;
+    soundEnabled: boolean;
+    cameraMode: CameraMode;
+    playerName: string;
+    multiplayerRoom: string;
     units: "metric";
   };
 }
@@ -285,6 +358,7 @@ export interface RoadSegment {
   to: string;
   width: number;
   district: string;
+  name?: string;
   kind: "motorway" | "primary" | "secondary" | "tertiary" | "residential" | "service" | "arterial" | "street" | "bridge" | "alley";
 }
 
@@ -305,6 +379,27 @@ export interface RoadChunk {
   landmarks: Landmark[];
 }
 
+export type MapBuildingKind = "temple" | "commercial" | "residential" | "civic" | "industrial" | "generic";
+
+// Footprints are in world meters (already multiplied by MAP_SCALE); heights are real-world meters.
+export interface MapBuilding {
+  id: string;
+  footprint: WorldMeters[];
+  heightMeters: number;
+  kind: MapBuildingKind;
+  name?: string;
+}
+
+export type MapAreaKind = "water" | "park" | "temple_ground";
+
+export interface MapArea {
+  id: string;
+  kind: MapAreaKind;
+  outer: WorldMeters[];
+  holes?: WorldMeters[][];
+  name?: string;
+}
+
 export interface RoadTile {
   id: string;
   boundsLatLng: { south: number; west: number; north: number; east: number };
@@ -312,6 +407,7 @@ export interface RoadTile {
   originMeters: WorldMeters;
   nodes: RoadNode[];
   segments: RoadSegment[];
+  buildings?: MapBuilding[];
   districtIds: string[];
   loadedAt: number;
 }
@@ -329,6 +425,11 @@ export interface RoadTileManifest {
   tileSizeMeters: number;
   generatedAt: string;
   tiles: RoadTileManifestEntry[];
+  source?: "fallback" | "osm";
+  mapScale?: number;
+  areasHref?: string;
+  placesHref?: string;
+  attribution?: string;
 }
 
 export interface StreamingMapState {
