@@ -16,6 +16,7 @@ export interface UiActions {
   respawn: boolean;
   toggleGarage: boolean;
   toggleMissions: boolean;
+  toggleGuide: boolean;
   horn: boolean;
 }
 
@@ -25,6 +26,7 @@ const latchKeys: Record<string, keyof Omit<UiActions, "horn">> = {
   KeyR: "respawn",
   KeyG: "toggleGarage",
   KeyJ: "toggleMissions",
+  KeyB: "toggleGuide",
 };
 
 export class InputController {
@@ -67,6 +69,7 @@ export class InputController {
       respawn: this.uiLatches.has("respawn"),
       toggleGarage: this.uiLatches.has("toggleGarage"),
       toggleMissions: this.uiLatches.has("toggleMissions"),
+      toggleGuide: this.uiLatches.has("toggleGuide"),
       horn: this.pressed.has("KeyH") || this.touchHorn,
     };
     this.uiLatches.clear();

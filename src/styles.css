@@ -127,6 +127,14 @@ a {
   backdrop-filter: blur(12px);
   font-size: 14px;
   font-weight: 700;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.objective-chip [data-ui="objective"] {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .objective-timer {
@@ -1410,4 +1418,271 @@ kbd {
   padding: 2px 8px;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Bangkok Guide */
+.nav-chip {
+  position: absolute;
+  left: max(18px, env(safe-area-inset-left));
+  top: 156px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(420px, calc(100vw - 420px));
+  padding: 6px 6px 6px 12px;
+  border: 1px solid rgba(103, 232, 249, 0.45);
+  border-radius: 999px;
+  background: rgba(8, 47, 73, 0.82);
+  backdrop-filter: blur(12px);
+  color: #e0fbff;
+  font-size: 13px;
+  font-weight: 800;
+  pointer-events: auto;
+}
+
+.nav-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-cancel {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.guide-panel {
+  display: flex;
+  flex-direction: column;
+  width: min(420px, calc(100vw - 36px));
+}
+
+.guide-controls {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px 0;
+}
+
+.guide-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.guide-tabs button {
+  flex: none;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #cbd5e1;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.guide-tabs button.active {
+  border-color: var(--accent);
+  background: rgba(248, 217, 90, 0.16);
+  color: #fff7cc;
+}
+
+.guide-filters {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+}
+
+.guide-filters input,
+.guide-filters select {
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(11, 14, 18, 0.8);
+  color: #f8fafc;
+  padding: 0 10px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.guide-list {
+  gap: 8px;
+}
+
+.guide-count,
+.guide-note {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.guide-card {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.guide-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.guide-card small {
+  color: #94a3b8;
+}
+
+.guide-card p {
+  margin: 2px 0 0;
+  color: #d5dde7;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.guide-score {
+  flex: none;
+  color: #fde68a;
+  font-weight: 900;
+}
+
+.guide-score.google {
+  color: #93c5fd;
+}
+
+.guide-actions,
+.drawer-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.drawer-actions {
+  align-items: center;
+  margin: 12px 0;
+}
+
+.ghost-button {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: #e2e8f0;
+  font-weight: 800;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.place-sub {
+  margin: -4px 0 10px;
+  color: #94a3b8 !important;
+  font-size: 12px;
+}
+
+.review-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid rgba(248, 217, 90, 0.35);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(248, 217, 90, 0.1), rgba(248, 217, 90, 0.03));
+}
+
+.review-card p {
+  margin: 0;
+}
+
+.review-card ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #e2e8f0;
+  font-size: 13px;
+}
+
+.review-score {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.review-score strong {
+  font-size: 20px;
+}
+
+.review-score small {
+  color: #94a3b8;
+}
+
+.stars {
+  color: #fbbf24;
+  letter-spacing: 1px;
+}
+
+.review-en {
+  color: #94a3b8 !important;
+  font-size: 12px;
+  font-style: italic;
+}
+
+.review-tip {
+  font-size: 12px;
+}
+
+.review-tip b {
+  color: #fde68a;
+  margin-right: 4px;
+}
+
+.user-reviews {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.user-reviews h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.user-reviews article {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 12px;
+}
+
+.user-reviews a {
+  color: #93c5fd;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.user-reviews p {
+  display: -webkit-box;
+  margin: 4px 0 0;
+  overflow: hidden;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+}
+
+@media (max-width: 760px), (pointer: coarse) {
+  .nav-chip {
+    top: auto;
+    bottom: 250px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: calc(100vw - 40px);
+    font-size: 12px;
+  }
 }

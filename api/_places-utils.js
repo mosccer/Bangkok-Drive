@@ -185,7 +185,7 @@ export async function fetchGoogleDetail(placeId, lang = "th") {
     headers: {
       "X-Goog-Api-Key": process.env.GOOGLE_PLACES_API_KEY,
       "X-Goog-FieldMask":
-        "id,displayName,formattedAddress,location,rating,userRatingCount,priceLevel,types,regularOpeningHours,photos,websiteUri,googleMapsUri,nationalPhoneNumber,editorialSummary,attributions",
+        "id,displayName,formattedAddress,location,rating,userRatingCount,priceLevel,types,regularOpeningHours,photos,websiteUri,googleMapsUri,nationalPhoneNumber,editorialSummary,attributions,reviews",
     },
   });
 
@@ -230,6 +230,21 @@ export function normalizeGoogleDetail(raw, cached, lang = "th") {
     description: raw.editorialSummary?.text,
     descriptionTh: lang === "th" ? raw.editorialSummary?.text : undefined,
     descriptionEn: lang === "en" ? raw.editorialSummary?.text : undefined,
+    userReviews: normalizeGoogleReviews(raw.reviews),
     sourceAttributions: attributions.length > 0 ? attributions : [{ provider: "Google Maps" }],
   };
+}
+
+// Google requires reviews to be shown with their author attribution.
+export function normalizeGoogleReviews(reviews = []) {
+  return reviews
+    .map((review) => ({
+      authorName: review.authorAttribution?.displayName ?? "Google user",
+      authorUri: review.authorAttribution?.uri,
+      rating: review.rating,
+      text: review.text?.text ?? review.originalText?.text ?? "",
+      relativeTime: review.relativePublishTimeDescription,
+    }))
+    .filter((review) => review.text)
+    .slice(0, 5);
 }

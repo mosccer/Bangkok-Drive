@@ -1,6 +1,6 @@
 import type { PlaceDetail, PlaceListResponse, PlaceQuery, PlaceSummary } from "../types";
 import { queryPlaces } from "../simulation/placeQueries";
-import { createCachedPlaceDetail } from "./placeNormalization";
+import { createCachedPlaceDetail, withGuideReview } from "./placeNormalization";
 
 export interface PlacesService {
   listSummaries(query?: PlaceQuery): Promise<PlaceListResponse>;
@@ -60,7 +60,7 @@ export class GooglePlacesProxyService implements PlacesService {
     try {
       const response = await fetch(`${this.endpoint}/places/${encodeURIComponent(placeId)}?lang=${lang}`);
       if (!response.ok) throw new Error(`Place detail request failed: ${response.status}`);
-      return (await response.json()) as PlaceDetail;
+      return withGuideReview((await response.json()) as PlaceDetail);
     } catch {
       return this.fallback.getDetail(placeId, lang);
     }

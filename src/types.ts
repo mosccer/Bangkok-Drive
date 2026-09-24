@@ -37,6 +37,23 @@ export interface PlaceSummary {
   tags: string[];
 }
 
+export interface GuideReview {
+  score: number;
+  summaryTh: string;
+  summaryEn: string;
+  highlights: string[];
+  tipTh: string;
+  bestTime: string;
+}
+
+export interface UserReview {
+  authorName: string;
+  authorUri?: string;
+  rating?: number;
+  text: string;
+  relativeTime?: string;
+}
+
 export interface PlaceDetail extends PlaceSummary {
   addressTh?: string;
   addressEn?: string;
@@ -52,6 +69,8 @@ export interface PlaceDetail extends PlaceSummary {
     provider: string;
     providerUri?: string;
   }>;
+  guideReview?: GuideReview;
+  userReviews?: UserReview[];
 }
 
 export interface PlaceQuery {

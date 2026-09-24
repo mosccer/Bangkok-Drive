@@ -53,7 +53,8 @@ import { pruneStaleGhosts } from "../../simulation/ghosts";
 import { createOnlineService, type OnlineService } from "../../services/onlineService";
 import { MapStreamingService } from "../../services/MapStreamingService";
 import { CachedPlacesService, GooglePlacesProxyService, type PlacesService } from "../../services/placesService";
-import { Hud, MINIMAP_ZOOM_LEVELS, type MinimapOverlay, type MissionBoardEntry } from "../../ui/Hud";
+import { formatDistance, Hud, MINIMAP_ZOOM_LEVELS, type MinimapOverlay, type MissionBoardEntry } from "../../ui/Hud";
+import { guideReviewFor } from "../../data/guideReviews";
 import { buildArcadeVisualSettings } from "../arcadeVisuals";
 import { WorldRenderer } from "../WorldRenderer";
 
@@ -117,6 +118,8 @@ export class GameApp {
   private statsFlushTimer = 0;
   private panelsDirty = true;
   private lastPanelRefresh = 0;
+  private guideTarget?: PlaceSummary;
+  private lastGuideRefresh = 0;
 
   constructor(private readonly host: HTMLElement) {
     this.host.className = "game-shell";
@@ -143,7 +146,13 @@ export class GameApp {
       onStartMission: (id) => this.startMissionById(id),
       onSettingsChange: (patch) => this.changeSettings(patch),
       onResume: () => this.setPaused(false),
-      onPanelOpen: () => this.refreshPanels(true),
+      onPanelOpen: () => {
+        this.refreshPanels(true);
+        this.refreshGuide();
+      },
+      onNavigate: (placeId) => this.navigateTo(placeId),
+      onCancelNavigation: () => this.clearNavigation(),
+      onOpenPlace: (placeId) => void this.openPlace(placeId),
     });
     this.refreshPanels(true);
   }
@@ -226,15 +235,20 @@ export class GameApp {
     this.updateVisiblePlaces();
     const activeMission = this.getActiveMission();
     const progress = ensureMissionProgress(this.save, activeMission);
-    const waypoint = activeWaypoint(activeMission, progress, this.places);
+    const missionStop = activeWaypoint(activeMission, progress, this.places);
+    const waypoint = this.guideTarget ?? missionStop;
     const waypointLocal = waypoint ? geoToLocal(waypoint, this.worldAnchor) : undefined;
+    this.updateNavigation(waypointLocal);
+    if (this.hud.isPanelOpen("guide") && time - this.lastGuideRefresh > 1500) {
+      this.refreshGuide(true);
+    }
     const nearby = this.findNearbyPlace();
     const missionHud = {
       waitingForStart: Boolean(activeMission.timeLimit) && !this.missionTimer,
       remainingSeconds: this.missionTimer ? remainingSeconds(this.missionTimer, activeMission) : undefined,
       elapsedSeconds: this.missionTimer ? totalRunSeconds(this.missionTimer) : undefined,
     };
-    this.hud.update(this.vehicle.state, activeMission, this.save, nearby, waypoint, waypointLocal, missionHud);
+    this.hud.update(this.vehicle.state, activeMission, this.save, nearby, waypoint, waypointLocal, missionHud, missionStop);
     this.hud.updateNitro(this.nitro.charge, this.nitroActive, this.nitro.locked);
     this.hud.updateDrift(this.drift);
     this.hud.drawMinimap(this.vehicle.state, this.visiblePlaces, (place) => geoToLocal(place, this.worldAnchor), waypoint, this.minimapOverlay());
@@ -242,7 +256,7 @@ export class GameApp {
     this.renderer.setVisiblePlaces(this.visiblePlaces);
     this.renderer.setActiveWaypoint(waypoint);
     this.renderer.setGhostCars(pruneStaleGhosts(this.ghostStates, performance.now()));
-    if (this.panelsDirty && time - this.lastPanelRefresh > 1000) {
+    if (this.panelsDirty && time - this.lastPanelRefresh > 1000 && !this.hud.isPointerOverPanel()) {
       this.refreshPanels();
     }
     void this.maybeOpenNearbyDetail(nearby);
@@ -263,6 +277,7 @@ export class GameApp {
     this.audio.setHorn(ui.horn && !this.paused);
     if (ui.toggleGarage) this.hud.togglePanel("garage");
     if (ui.toggleMissions) this.hud.togglePanel("missions");
+    if (ui.toggleGuide) this.hud.togglePanel("guide");
     if (ui.zoomMinimap) {
       this.minimapZoomIndex = (this.minimapZoomIndex + 1) % MINIMAP_ZOOM_LEVELS.length;
       this.hud.setMinimapZoomLabel(this.minimapZoomIndex);
@@ -366,6 +381,55 @@ export class GameApp {
         bestTimeMs: this.save.career.bestTimesMs[mission.id],
       };
     });
+  }
+
+  private refreshGuide(background = false): void {
+    this.lastGuideRefresh = performance.now();
+    const here = localToGeo(this.vehicle.state.position, this.worldAnchor);
+    this.hud.updateGuide(
+      this.places.map((place) => ({ place, review: guideReviewFor(place.id), distanceMeters: distanceMetersBetweenGeo(here, place) })),
+      background,
+    );
+  }
+
+  private navigateTo(placeId: string): void {
+    const place = this.places.find((candidate) => candidate.id === placeId);
+    if (!place) return;
+    this.guideTarget = place;
+    this.hud.toast(`นำทางไป ${placeDisplayName(place)}`, "ตามเข็มทิศและเส้นบนแผนที่ · กด × เพื่อยกเลิก", "info");
+    this.audio.playUi();
+  }
+
+  private clearNavigation(): void {
+    this.guideTarget = undefined;
+    this.hud.setNavigation(undefined);
+  }
+
+  private updateNavigation(targetLocal?: { x: number; z: number }): void {
+    if (!this.guideTarget || !targetLocal) {
+      this.hud.setNavigation(undefined);
+      return;
+    }
+    const here = localToGeo(this.vehicle.state.position, this.worldAnchor);
+    const distance = distanceMetersBetweenGeo(here, this.guideTarget);
+    const worldDistance = Math.hypot(targetLocal.x - this.vehicle.state.position.x, targetLocal.z - this.vehicle.state.position.z);
+    if (worldDistance < WAYPOINT_RADIUS_METERS) {
+      const arrived = this.guideTarget;
+      this.clearNavigation();
+      this.hud.toast(`ถึงแล้ว: ${placeDisplayName(arrived)}`, "เปิดรีวิวในไกด์", "reward");
+      this.audio.playCheckpoint();
+      void this.openPlace(arrived.id);
+      return;
+    }
+    this.hud.setNavigation(`📍 ${placeDisplayName(this.guideTarget)} · ${formatDistance(distance)}`);
+  }
+
+  private async openPlace(placeId: string): Promise<void> {
+    const detail = await this.placesService.getDetail(placeId, "th");
+    if (!detail) return;
+    const here = localToGeo(this.vehicle.state.position, this.worldAnchor);
+    this.detailRequest = placeId;
+    this.hud.openDetail(detail, distanceMetersBetweenGeo(here, detail));
   }
 
   private getActiveMission(): Mission {
@@ -618,7 +682,7 @@ export class GameApp {
     this.detailRequest = nearby.id;
     const detail = await this.placesService.getDetail(nearby.id, "th");
     if (detail && this.findNearbyPlace()?.id === nearby.id) {
-      this.hud.openDetail(detail);
+      this.hud.openDetail(detail, 0);
     }
   }
 

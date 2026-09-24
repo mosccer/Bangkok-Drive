@@ -9,6 +9,7 @@ import { mpsToKmh } from "../simulation/speed";
 import { getUpgradeLevels, MAX_UPGRADE_LEVEL, paintPalette, upgradeCost, upgradeLabels, upgradeSlots } from "../simulation/upgrades";
 import type {
   CameraMode,
+  GuideReview,
   Mission,
   PlaceCategory,
   PlaceDetail,
@@ -69,6 +70,69 @@ export interface MissionHudState {
 
 export type ToastTone = "info" | "reward" | "warning" | "danger";
 
+export interface GuideEntry {
+  place: PlaceSummary;
+  review?: GuideReview;
+  distanceMeters: number;
+}
+
+type GuideTab = "all" | "temple" | "cafe" | "attraction" | "food";
+
+const guideTabs: Array<{ id: GuideTab; label: string }> = [
+  { id: "all", label: "ทั้งหมด" },
+  { id: "temple", label: "วัด" },
+  { id: "cafe", label: "คาเฟ่" },
+  { id: "attraction", label: "เที่ยว" },
+  { id: "food", label: "อาหาร" },
+];
+
+const tabCategories: Record<Exclude<GuideTab, "all">, PlaceCategory[]> = {
+  temple: ["temple"],
+  cafe: ["cafe", "bakery", "dessert"],
+  attraction: ["tourist_attraction", "museum", "park", "shopping_mall", "market", "night_market"],
+  food: ["street_food", "restaurant"],
+};
+
+const categoryLabels: Record<PlaceCategory, string> = {
+  tourist_attraction: "แหล่งท่องเที่ยว",
+  temple: "วัด",
+  museum: "พิพิธภัณฑ์",
+  park: "สวนสาธารณะ",
+  shopping_mall: "ห้างสรรพสินค้า",
+  market: "ตลาด",
+  night_market: "ตลาดกลางคืน",
+  restaurant: "ร้านอาหาร",
+  street_food: "สตรีทฟู้ด",
+  cafe: "คาเฟ่",
+  bakery: "เบเกอรี่",
+  dessert: "ของหวาน",
+};
+
+export function filterGuideEntries(entries: GuideEntry[], tab: GuideTab, search: string, sort: "near" | "score"): GuideEntry[] {
+  const query = search.trim().toLowerCase();
+  return entries
+    .filter((entry) => tab === "all" || tabCategories[tab].includes(entry.place.category))
+    .filter(
+      (entry) =>
+        !query ||
+        [entry.place.nameTh, entry.place.nameEn ?? "", entry.place.name, entry.place.districtName, ...entry.place.tags].some((text) => text.toLowerCase().includes(query)),
+    )
+    .sort((a, b) =>
+      sort === "score"
+        ? (b.review?.score ?? b.place.rating ?? 0) - (a.review?.score ?? a.place.rating ?? 0) || a.distanceMeters - b.distanceMeters
+        : a.distanceMeters - b.distanceMeters,
+    );
+}
+
+export function formatDistance(meters: number): string {
+  return meters < 1000 ? `${Math.round(meters / 10) * 10} ม.` : `${(meters / 1000).toFixed(1)} กม.`;
+}
+
+function stars(score: number): string {
+  const full = Math.round(score);
+  return "★".repeat(full) + "☆".repeat(Math.max(0, 5 - full));
+}
+
 export interface HudHandlers {
   onSelectVehicle: (id: string) => void;
   onUpgrade: (slot: UpgradeSlot) => void;
@@ -77,9 +141,12 @@ export interface HudHandlers {
   onSettingsChange: (patch: Partial<SaveGame["settings"]>) => void;
   onResume: () => void;
   onPanelOpen: () => void;
+  onNavigate: (placeId: string) => void;
+  onCancelNavigation: () => void;
+  onOpenPlace: (placeId: string) => void;
 }
 
-type PanelName = "garage" | "missions" | "settings";
+type PanelName = "garage" | "missions" | "settings" | "guide";
 
 const cameraLabels: Record<CameraMode, string> = {
   chase: "Chase",
@@ -112,6 +179,15 @@ export class Hud {
   private readonly garageBody: HTMLElement;
   private readonly missionsBody: HTMLElement;
   private readonly settingsBody: HTMLElement;
+  private readonly guideList: HTMLElement;
+  private readonly navChip: HTMLElement;
+  private readonly navText: HTMLElement;
+  private guideEntries: GuideEntry[] = [];
+  private guideTab: GuideTab = "all";
+  private guideSearch = "";
+  private guideSort: "near" | "score" = "near";
+  private guideHtml = "";
+  private pointerOverPanel = false;
   private readonly pauseOverlay: HTMLElement;
   private readonly minimap: HTMLCanvasElement;
   private readonly minimapContext: CanvasRenderingContext2D;
@@ -130,6 +206,10 @@ export class Hud {
         <span data-ui="objective">Loading Bangkok route...</span>
         <span class="objective-timer hidden" data-ui="objective-timer"></span>
       </div>
+      <div class="nav-chip hidden" data-ui="nav-chip">
+        <span data-ui="nav-text"></span>
+        <button class="nav-cancel" data-ui="nav-cancel" aria-label="Stop navigation">×</button>
+      </div>
       <div class="compass-wrapper">
         <div class="compass-needle">▼</div>
         <div class="compass-viewport">
@@ -142,6 +222,7 @@ export class Hud {
         <button class="icon-button pause-button" data-control="pause" aria-label="Pause">II</button>
         <button class="menu-button" data-ui="garage-button" title="Garage (G)">Garage</button>
         <button class="menu-button" data-ui="missions-button" title="Missions (J)">Missions</button>
+        <button class="menu-button" data-ui="guide-button" title="Bangkok Guide (B)">Guide</button>
         <button class="icon-button" data-ui="settings-button" aria-label="Settings" title="Settings">⚙</button>
       </div>
       <div class="minimap-wrap">
@@ -213,6 +294,25 @@ export class Hud {
         </div>
         <div class="panel-body" data-ui="missions-body"></div>
       </aside>
+      <aside class="side-panel guide-panel" data-ui="guide-panel">
+        <div class="drawer-head">
+          <strong>Bangkok Guide · แนะนำที่เที่ยว</strong>
+          <button class="icon-button" data-close-panel aria-label="Close">x</button>
+        </div>
+        <div class="guide-controls">
+          <div class="guide-tabs" data-ui="guide-tabs">
+            ${guideTabs.map((tab) => `<button data-tab="${tab.id}" class="${tab.id === "all" ? "active" : ""}">${tab.label}</button>`).join("")}
+          </div>
+          <div class="guide-filters">
+            <input type="search" placeholder="ค้นหาชื่อ ย่าน หรือแท็ก" data-ui="guide-search" aria-label="Search places" />
+            <select data-ui="guide-sort" aria-label="Sort">
+              <option value="near">ใกล้ที่สุด</option>
+              <option value="score">คะแนนสูงสุด</option>
+            </select>
+          </div>
+        </div>
+        <div class="panel-body guide-list" data-ui="guide-list"></div>
+      </aside>
       <aside class="side-panel" data-ui="settings-panel">
         <div class="drawer-head">
           <strong>Settings</strong>
@@ -276,7 +376,11 @@ export class Hud {
       garage: this.mustFind("[data-ui='garage-panel']"),
       missions: this.mustFind("[data-ui='missions-panel']"),
       settings: this.mustFind("[data-ui='settings-panel']"),
+      guide: this.mustFind("[data-ui='guide-panel']"),
     };
+    this.guideList = this.mustFind("[data-ui='guide-list']");
+    this.navChip = this.mustFind("[data-ui='nav-chip']");
+    this.navText = this.mustFind("[data-ui='nav-text']");
     this.garageBody = this.mustFind("[data-ui='garage-body']");
     this.missionsBody = this.mustFind("[data-ui='missions-body']");
     this.settingsBody = this.mustFind("[data-ui='settings-body']");
@@ -296,6 +400,52 @@ export class Hud {
     this.mustFind("[data-ui='garage-button']").addEventListener("click", () => this.togglePanel("garage"));
     this.mustFind("[data-ui='missions-button']").addEventListener("click", () => this.togglePanel("missions"));
     this.mustFind("[data-ui='settings-button']").addEventListener("click", () => this.togglePanel("settings"));
+    this.mustFind("[data-ui='guide-button']").addEventListener("click", () => this.togglePanel("guide"));
+    this.mustFind("[data-ui='nav-cancel']").addEventListener("click", () => this.handlers?.onCancelNavigation());
+    for (const tab of this.root.querySelectorAll<HTMLButtonElement>("[data-tab]")) {
+      tab.addEventListener("click", () => {
+        this.guideTab = tab.dataset.tab as GuideTab;
+        for (const other of this.root.querySelectorAll("[data-tab]")) other.classList.toggle("active", other === tab);
+        this.renderGuide();
+        tab.blur();
+      });
+    }
+    const search = this.mustFind<HTMLInputElement>("[data-ui='guide-search']");
+    search.addEventListener("input", () => {
+      this.guideSearch = search.value;
+      this.renderGuide();
+    });
+    const sort = this.mustFind<HTMLSelectElement>("[data-ui='guide-sort']");
+    sort.addEventListener("change", () => {
+      this.guideSort = sort.value === "score" ? "score" : "near";
+      this.renderGuide();
+      sort.blur();
+    });
+    for (const panel of Object.values(this.panels)) {
+      panel.addEventListener("pointerenter", () => {
+        this.pointerOverPanel = true;
+      });
+      panel.addEventListener("pointerleave", () => {
+        this.pointerOverPanel = false;
+      });
+    }
+    this.guideList.addEventListener("click", (event) => {
+      const button = (event.target as HTMLElement).closest<HTMLElement>("[data-open], [data-go]");
+      if (!button) return;
+      if (button.dataset.open) {
+        this.handlers?.onOpenPlace(button.dataset.open);
+      } else if (button.dataset.go) {
+        this.handlers?.onNavigate(button.dataset.go);
+        this.closePanels();
+      }
+    });
+    this.drawerBody.addEventListener("click", (event) => {
+      const target = (event.target as HTMLElement).closest<HTMLElement>("[data-navigate]");
+      if (target?.dataset.navigate) {
+        this.handlers?.onNavigate(target.dataset.navigate);
+        this.closeDrawer();
+      }
+    });
     this.mustFind("[data-ui='resume']").addEventListener("click", () => this.handlers?.onResume());
     for (const button of this.root.querySelectorAll<HTMLElement>("[data-close-panel]")) {
       button.addEventListener("click", () => this.closePanels());
@@ -345,6 +495,7 @@ export class Hud {
     waypoint?: PlaceSummary,
     waypointLocal?: { x: number; z: number },
     missionState?: MissionHudState,
+    missionStop: PlaceSummary | undefined = waypoint,
   ): void {
     this.speed.textContent = Math.round(Math.abs(mpsToKmh(vehicle.speed))).toString();
     this.gear.textContent = vehicle.gearMode === "reverse" ? "R" : vehicle.gearMode === "neutral" ? "N" : "D";
@@ -355,7 +506,7 @@ export class Hud {
       : progress
         ? `${Math.min(progress.reachedWaypointIds.length + 1, mission.waypoints.length)}/${mission.waypoints.length}`
         : `${mission.waypoints.length} stops`;
-    const objectiveText = `${mission.title} | ${stopText}${waypoint ? ` → ${placeDisplayName(waypoint)}` : ""}`;
+    const objectiveText = `${mission.title} | ${stopText}${missionStop ? ` → ${placeDisplayName(missionStop)}` : ""}`;
     if (this.objective.textContent !== objectiveText) this.objective.textContent = objectiveText;
     this.updateMissionTimer(mission, missionState);
     this.updateCareer(save);
@@ -363,7 +514,7 @@ export class Hud {
     if (nearby) {
       this.poiPrompt.classList.remove("hidden");
       this.poiPrompt.textContent = `Open ${placeDisplayName(nearby)}`;
-      this.poiPrompt.onclick = () => this.openSummary(nearby);
+      this.poiPrompt.onclick = () => this.handlers?.onOpenPlace(nearby.id);
     } else {
       this.poiPrompt.classList.add("hidden");
       this.poiPrompt.onclick = null;
@@ -594,17 +745,48 @@ export class Hud {
     this.minimapZoomLabel.textContent = `M · ${["1x", "2x", "½x"][zoomIndex] ?? "1x"}`;
   }
 
-  openDetail(detail: PlaceDetail): void {
+  openDetail(detail: PlaceDetail, distanceMeters?: number): void {
+    const review = detail.guideReview;
+    const secondaryName = detail.nameEn && detail.nameEn !== placeDisplayName(detail) ? detail.nameEn : "";
+    const description = review ? "" : (detail.descriptionTh ?? detail.description ?? "");
     this.drawerBody.innerHTML = `
       <h2>${escapeHtml(placeDisplayName(detail))}</h2>
-      <p>${escapeHtml(detail.descriptionTh ?? detail.description ?? "ครอบคลุมข้อมูลจากแหล่งทางการและ Google Places ตามหมวดที่รองรับ")}</p>
+      <p class="place-sub">${escapeHtml([secondaryName, categoryLabels[detail.category], detail.districtName, distanceMeters !== undefined ? formatDistance(distanceMeters) : ""].filter(Boolean).join(" · "))}</p>
+      ${
+        review
+          ? `<section class="review-card">
+        <div class="review-score"><span class="stars">${stars(review.score)}</span><strong>${review.score.toFixed(1)}</strong><small>คะแนนไกด์ MOSGAME</small></div>
+        <p>${escapeHtml(review.summaryTh)}</p>
+        <p class="review-en">${escapeHtml(review.summaryEn)}</p>
+        <ul>${review.highlights.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+        <p class="review-tip"><b>เคล็ดลับ</b> ${escapeHtml(review.tipTh)}</p>
+        <p class="review-tip"><b>ช่วงเวลาแนะนำ</b> ${escapeHtml(review.bestTime)}</p>
+      </section>`
+          : description
+            ? `<p>${escapeHtml(description)}</p>`
+            : ""
+      }
+      <div class="drawer-actions">
+        <button class="primary-button" data-navigate="${escapeHtml(detail.id)}">นำทางไปที่นี่</button>
+        <a class="drawer-link" href="${escapeHtml(detail.googleMapsUri ?? "#")}" target="_blank" rel="noreferrer">Google Maps</a>
+      </div>
       <dl>
-        <dt>District</dt><dd>${escapeHtml(detail.districtName)}</dd>
-        <dt>Category</dt><dd>${escapeHtml(detail.category.replace("_", " "))}</dd>
-        <dt>Rating</dt><dd>${detail.rating ?? "N/A"} (${detail.userRatingCount ?? 0})</dd>
-        ${detail.openingHours?.length ? `<dt>Hours</dt><dd>${escapeHtml(detail.openingHours[0])}</dd>` : ""}
+        ${detail.rating ? `<dt>Google</dt><dd>★ ${detail.rating} (${formatNumber(detail.userRatingCount ?? 0)} รีวิว)</dd>` : ""}
+        ${detail.openingHours?.length ? `<dt>เวลาเปิด</dt><dd>${escapeHtml(detail.openingHours[0])}</dd>` : ""}
+        ${detail.addressTh || detail.addressEn ? `<dt>ที่อยู่</dt><dd>${escapeHtml(detail.addressTh ?? detail.addressEn ?? "")}</dd>` : ""}
       </dl>
-      <a class="drawer-link" href="${escapeHtml(detail.googleMapsUri ?? "#")}" target="_blank" rel="noreferrer">Open in Google Maps</a>
+      ${
+        detail.userReviews?.length
+          ? `<section class="user-reviews"><h3>รีวิวจากผู้ใช้ Google</h3>${detail.userReviews
+              .map(
+                (item) => `<article>
+            <div><a href="${escapeHtml(item.authorUri ?? "#")}" target="_blank" rel="noreferrer">${escapeHtml(item.authorName)}</a>${item.rating ? ` <span class="stars">${stars(item.rating)}</span>` : ""}${item.relativeTime ? ` <small>${escapeHtml(item.relativeTime)}</small>` : ""}</div>
+            <p>${escapeHtml(item.text)}</p>
+          </article>`,
+              )
+              .join("")}</section>`
+          : ""
+      }
       ${detail.sourceAttributions.length ? `<p class="attribution">${detail.sourceAttributions.map((item) => escapeHtml(item.provider)).join(" | ")}</p>` : ""}
     `;
     this.drawer.classList.add("open");
@@ -748,6 +930,57 @@ export class Hud {
     }
   }
 
+  isPanelOpen(name: PanelName): boolean {
+    return this.panels[name].classList.contains("open");
+  }
+
+  // Background refreshes skip while the pointer is over the panel so buttons are never swapped mid-click.
+  updateGuide(entries: GuideEntry[], background = false): void {
+    this.guideEntries = entries;
+    if (background && this.pointerOverPanel) return;
+    this.renderGuide();
+  }
+
+  isPointerOverPanel(): boolean {
+    return this.pointerOverPanel;
+  }
+
+  setNavigation(text?: string): void {
+    this.navChip.classList.toggle("hidden", !text);
+    if (text && this.navText.textContent !== text) this.navText.textContent = text;
+  }
+
+  private renderGuide(): void {
+    const filtered = filterGuideEntries(this.guideEntries, this.guideTab, this.guideSearch, this.guideSort);
+    const shown = filtered.slice(0, 60);
+    const html = `
+      <p class="guide-count">${filtered.length} แห่ง${filtered.length > shown.length ? ` · แสดง ${shown.length} แห่งแรก` : ""}</p>
+      ${shown
+        .map(
+          ({ place, review, distanceMeters }) => `
+        <article class="guide-card">
+          <div class="guide-card-head">
+            <strong>${escapeHtml(placeDisplayName(place))}</strong>
+            ${review ? `<span class="guide-score" title="คะแนนไกด์">★ ${review.score.toFixed(1)}</span>` : place.rating ? `<span class="guide-score google" title="Google rating">G ${place.rating.toFixed(1)}</span>` : ""}
+          </div>
+          <small>${escapeHtml(place.nameEn && place.nameEn !== placeDisplayName(place) ? `${place.nameEn} · ` : "")}${escapeHtml(categoryLabels[place.category])} · ${escapeHtml(place.districtName)} · ${formatDistance(Math.round(distanceMeters / 100) * 100)}</small>
+          ${review ? `<p>${escapeHtml(review.summaryTh)}</p>` : ""}
+          <div class="guide-actions">
+            <button class="ghost-button" data-open="${escapeHtml(place.id)}">รีวิว</button>
+            <button class="primary-button small" data-go="${escapeHtml(place.id)}">นำทาง</button>
+          </div>
+        </article>`,
+        )
+        .join("")}
+      <p class="guide-note">รีวิวในเกมเขียนโดยทีมไกด์ · ดูรีวิวผู้ใช้จริงผ่าน Google Maps · นำเข้าวัดทั้งหมดจาก OpenStreetMap ด้วย npm run osm:import</p>
+    `;
+    if (html === this.guideHtml) return;
+    this.guideHtml = html;
+    const scrollTop = this.panels.guide.scrollTop;
+    this.guideList.innerHTML = html;
+    this.panels.guide.scrollTop = scrollTop;
+  }
+
   updateSettings(settings: SaveGame["settings"]): void {
     const option = (value: string, label: string, current: string) => `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`;
     this.settingsBody.innerHTML = `
@@ -795,21 +1028,7 @@ export class Hud {
     }
   }
 
-  private openSummary(place: PlaceSummary): void {
-    this.drawerBody.innerHTML = `
-      <h2>${escapeHtml(placeDisplayName(place))}</h2>
-      <p>ครอบคลุมข้อมูลจากแหล่งทางการและ Google Places ตามหมวดที่รองรับ</p>
-      <dl>
-        <dt>District</dt><dd>${escapeHtml(place.districtName)}</dd>
-        <dt>Category</dt><dd>${escapeHtml(place.category.replace("_", " "))}</dd>
-        <dt>Rating</dt><dd>${place.rating ?? "N/A"}</dd>
-      </dl>
-      ${place.attributionRequired ? `<p class="attribution">Google Maps</p>` : ""}
-    `;
-    this.drawer.classList.add("open");
-  }
-
-  private closeDrawer(): void {
+  closeDrawer(): void {
     this.drawer.classList.remove("open");
   }
 

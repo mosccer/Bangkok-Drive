@@ -1,5 +1,6 @@
-import type { PlaceCategory, PlaceDetail, PlaceSummary } from "../types";
+import type { PlaceCategory, PlaceDetail, PlaceSummary, UserReview } from "../types";
 import { findDistrictByName, getDistrictById } from "../data/bangkokDistricts";
+import { guideReviewFor } from "../data/guideReviews";
 
 export interface GooglePlaceLike {
   id?: string;
@@ -19,6 +20,32 @@ export interface GooglePlaceLike {
   internationalPhoneNumber?: string;
   editorialSummary?: { text?: string; languageCode?: string };
   attributions?: Array<{ provider?: string; providerUri?: string }>;
+  reviews?: Array<{
+    rating?: number;
+    text?: { text?: string };
+    originalText?: { text?: string };
+    relativePublishTimeDescription?: string;
+    authorAttribution?: { displayName?: string; uri?: string };
+  }>;
+}
+
+export function normalizeGoogleReviews(reviews: GooglePlaceLike["reviews"] = []): UserReview[] {
+  return reviews
+    .map((review) => ({
+      authorName: review.authorAttribution?.displayName ?? "Google user",
+      authorUri: review.authorAttribution?.uri,
+      rating: review.rating,
+      text: review.text?.text ?? review.originalText?.text ?? "",
+      relativeTime: review.relativePublishTimeDescription,
+    }))
+    .filter((review) => review.text)
+    .slice(0, 5);
+}
+
+// Bundled editorial reviews ride along with any detail payload, cached or live.
+export function withGuideReview(detail: PlaceDetail): PlaceDetail {
+  const guideReview = detail.guideReview ?? guideReviewFor(detail.id);
+  return guideReview ? { ...detail, guideReview } : detail;
 }
 
 const GOOGLE_TYPE_TO_CATEGORY: Record<string, PlaceCategory> = {
@@ -145,20 +172,29 @@ export function normalizeGooglePlaceDetail(raw: GooglePlaceLike, cached: PlaceSu
     description: raw.editorialSummary?.text,
     descriptionTh: lang === "th" ? raw.editorialSummary?.text : undefined,
     descriptionEn: lang === "en" ? raw.editorialSummary?.text : undefined,
+    userReviews: normalizeGoogleReviews(raw.reviews),
+    guideReview: guideReviewFor(cached.id),
     sourceAttributions: attributions.length > 0 ? attributions : cached.attributionRequired ? [{ provider: "Google Maps" }] : [],
   };
 }
 
 export function createCachedPlaceDetail(cached: PlaceSummary, lang: "th" | "en" = "th"): PlaceDetail {
   const name = lang === "th" ? cached.nameTh : cached.nameEn || cached.nameTh;
+  const guideReview = guideReviewFor(cached.id);
   const descriptionTh =
-    cached.source === "curated"
+    guideReview?.summaryTh ??
+    (cached.source === "curated"
       ? "ข้อมูลสถานที่คัดเลือกสำหรับการขับสำรวจกรุงเทพในเกม ใช้ร่วมกับข้อมูล Google Places เมื่อเปิดใช้งาน API"
-      : "ข้อมูลจากแคช Google Places สำหรับการสำรวจในเกม";
+      : cached.source === "osm"
+        ? "สถานที่จาก OpenStreetMap เปิด Google Maps เพื่อดูรีวิวและเวลาเปิดล่าสุด"
+        : "ข้อมูลจากแคช Google Places สำหรับการสำรวจในเกม");
   const descriptionEn =
-    cached.source === "curated"
+    guideReview?.summaryEn ??
+    (cached.source === "curated"
       ? "Curated Bangkok guide entry for in-game exploration. Google Places details can enrich it when the API is configured."
-      : "Cached Google Places entry for in-game exploration.";
+      : cached.source === "osm"
+        ? "Place from OpenStreetMap. Open Google Maps for live reviews and hours."
+        : "Cached Google Places entry for in-game exploration.");
 
   return {
     ...cached,
@@ -167,6 +203,11 @@ export function createCachedPlaceDetail(cached: PlaceSummary, lang: "th" | "en" 
     descriptionTh,
     descriptionEn,
     googleMapsUri: cached.googleMapsUri ?? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(cached.nameEn ?? cached.nameTh)}`,
-    sourceAttributions: cached.attributionRequired ? [{ provider: "Google Maps" }] : [],
+    ...(guideReview ? { guideReview } : {}),
+    sourceAttributions: cached.attributionRequired
+      ? [{ provider: "Google Maps" }]
+      : cached.source === "osm"
+        ? [{ provider: "© OpenStreetMap contributors", providerUri: "https://www.openstreetmap.org/copyright" }]
+        : [],
   };
 }

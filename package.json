@@ -6,6 +6,7 @@
     "dev": "vite --host 0.0.0.0",
     "osm:import": "tsx scripts/import-osm.ts",
     "places:import": "node scripts/import-places.mjs",
+    "places:export-curated": "tsx scripts/export-curated-places.ts",
     "places:proxy": "node scripts/places-proxy.mjs",
     "build": "tsc && vite build",
     "lint": "eslint .",
