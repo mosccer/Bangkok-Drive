@@ -218,6 +218,7 @@ export interface HudHandlers {
   onStartRace: () => void;
   onJumpToPlayer: (playerId: string) => void;
   onCopyInvite: () => void;
+  onToggleFullscreen: () => void;
 }
 
 type PanelName = "garage" | "missions" | "settings" | "guide" | "online";
@@ -299,10 +300,10 @@ export class Hud {
       </div>
       <div class="menu-row">
         <button class="icon-button pause-button" data-control="pause" aria-label="Pause">II</button>
-        <button class="menu-button" data-ui="garage-button" title="Garage (G)">Garage</button>
-        <button class="menu-button" data-ui="missions-button" title="Missions (J)">Missions</button>
-        <button class="menu-button" data-ui="guide-button" title="Bangkok Guide (B)">Guide</button>
-        <button class="menu-button online-button" data-ui="online-button" title="Multiplayer (O)">Online</button>
+        <button class="menu-button" data-ui="garage-button" data-icon="🚗" title="Garage (G)" aria-label="Garage">Garage</button>
+        <button class="menu-button" data-ui="missions-button" data-icon="🎯" title="Missions (J)" aria-label="Missions">Missions</button>
+        <button class="menu-button" data-ui="guide-button" data-icon="📍" title="Bangkok Guide (B)" aria-label="Guide">Guide</button>
+        <button class="menu-button online-button" data-ui="online-button" data-icon="👥" title="Multiplayer (O)" aria-label="Online">Online</button>
         <button class="icon-button" data-ui="settings-button" aria-label="Settings" title="Settings">⚙</button>
       </div>
       <div class="minimap-wrap">
@@ -436,6 +437,7 @@ export class Hud {
         <div class="pause-card">
           <h2>Paused</h2>
           <button class="primary-button" data-ui="resume">Resume</button>
+          <button class="ghost-button fullscreen-button" data-ui="fullscreen">⛶ เต็มจอ / Fullscreen</button>
           <div class="controls-help">
             <span><kbd>W</kbd><kbd>S</kbd> Drive / brake</span>
             <span><kbd>A</kbd><kbd>D</kbd> Steer</span>
@@ -517,6 +519,7 @@ export class Hud {
     this.mustFind("[data-ui='settings-button']").addEventListener("click", () => this.togglePanel("settings"));
     this.mustFind("[data-ui='guide-button']").addEventListener("click", () => this.togglePanel("guide"));
     this.onlineButton.addEventListener("click", () => this.togglePanel("online"));
+    this.mustFind("[data-ui='fullscreen']").addEventListener("click", () => this.handlers?.onToggleFullscreen());
     const nameInput = this.mustFind<HTMLInputElement>("[data-ui='online-name']");
     const roomInput = this.mustFind<HTMLInputElement>("[data-ui='online-room']");
     this.mustFind("[data-ui='online-join']").addEventListener("click", () => this.handlers?.onJoinRoom(nameInput.value, roomInput.value));
@@ -1225,6 +1228,7 @@ export class Hud {
     const count = state.players.length;
     const buttonText = count ? `Online · ${count}` : "Online";
     if (this.onlineButton.textContent !== buttonText) this.onlineButton.textContent = buttonText;
+    this.onlineButton.dataset.count = count ? String(count) : "";
     const nameInput = this.mustFind<HTMLInputElement>("[data-ui='online-name']");
     const roomInput = this.mustFind<HTMLInputElement>("[data-ui='online-room']");
     if (document.activeElement !== nameInput && !nameInput.value) nameInput.value = state.name;
@@ -1349,6 +1353,9 @@ export class Hud {
         <label class="toggle"><input type="checkbox" data-setting="speedEffects" ${settings.speedEffects ? "checked" : ""}/> Speed effects</label>
         <label class="toggle"><input type="checkbox" data-setting="reduceMotion" ${settings.reduceMotion ? "checked" : ""}/> Reduce motion</label>
       </section>
+      <section class="panel-section">
+        <button class="ghost-button" data-ui="settings-fullscreen">⛶ เต็มจอ / Fullscreen</button>
+      </section>
       <section class="panel-section controls-help">
         <span><kbd>Space</kbd> Drift for points + nitro</span>
         <span><kbd>Shift</kbd> Nitro</span>
@@ -1358,6 +1365,7 @@ export class Hud {
         <span><kbd>H</kbd> Horn</span>
       </section>
     `;
+    this.settingsBody.querySelector("[data-ui='settings-fullscreen']")?.addEventListener("click", () => this.handlers?.onToggleFullscreen());
     for (const input of this.settingsBody.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-setting]")) {
       input.addEventListener("change", () => {
         const key = input.dataset.setting as keyof SaveGame["settings"];

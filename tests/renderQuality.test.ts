@@ -25,3 +25,12 @@ describe("render quality profiles", () => {
     expect(high.useEnhancedMaterials).toBe(true);
   });
 });
+
+describe("mobile rendering budget", () => {
+  it("drops shadows on low and mobile medium but keeps them on desktop and high", () => {
+    expect(getRenderQualityProfile("low").useShadows).toBe(false);
+    expect(getRenderQualityProfile("medium", true).useShadows).toBe(false);
+    expect(getRenderQualityProfile("medium").useShadows).toBe(true);
+    expect(getRenderQualityProfile("high", true).useShadows).toBe(true);
+  });
+});

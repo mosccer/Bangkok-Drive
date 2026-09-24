@@ -40,6 +40,7 @@ import { areaBounds, buildAreaObject, type AreaMaterials } from "./world/areaBui
 import { buildTileGroup, disposeGroup, type WorldMaterials } from "./world/tileBuilder";
 import { createSpeedEffectState, createVehicleVisualState, defaultArcadeVisualSettings } from "./arcadeVisuals";
 import { getRenderQualityProfile } from "./quality";
+import { AdaptiveResolution } from "./adaptiveResolution";
 
 const GROUND_SIZE = 2600;
 const GROUND_REPEAT = 60;
@@ -159,6 +160,8 @@ export class WorldRenderer {
   private cameraMode: CameraMode = "chase";
   private impactShake = 0;
   private readonly vehiclePosition = new THREE.Vector3();
+  private readonly adaptiveResolution = new AdaptiveResolution();
+  private lastRenderTime = 0;
 
   constructor(private readonly canvasHost: HTMLElement) {
     this.qualityProfile = getRenderQualityProfile("medium", this.isMobileViewport());
@@ -351,7 +354,7 @@ export class WorldRenderer {
     this.qualityProfile = getRenderQualityProfile(quality, this.isMobileViewport());
     this.canvasHost.dataset.quality = this.qualityProfile.quality;
     this.canvasHost.dataset.postfx = String(this.qualityProfile.usePostEffects);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.qualityProfile.pixelRatioCap));
+    this.applyPixelRatio();
     this.applyQuality();
     this.applyVisualMood();
     if (previous !== this.qualityProfile.quality) {
@@ -599,6 +602,12 @@ export class WorldRenderer {
       const pulse = 1 + Math.sin(t * 3) * 0.06;
       this.waypointRing.scale.set(pulse, pulse, 1);
     }
+    const now = performance.now();
+    if (this.lastRenderTime) {
+      const scale = this.adaptiveResolution.update(now - this.lastRenderTime);
+      if (scale !== undefined) this.applyPixelRatio();
+    }
+    this.lastRenderTime = now;
     if (this.composer) {
       this.composer.render();
     } else {
@@ -680,12 +689,25 @@ export class WorldRenderer {
     }
   }
 
+  // Pauses (hidden tab, pause menu) would look like one huge frame, so callers reset the timer.
+  resetFrameTimer(): void {
+    this.lastRenderTime = 0;
+  }
+
+  private applyPixelRatio(): void {
+    const ratio = Math.min(window.devicePixelRatio, this.qualityProfile.pixelRatioCap) * this.adaptiveResolution.scale;
+    if (Math.abs(this.renderer.getPixelRatio() - ratio) < 0.01) return;
+    this.renderer.setPixelRatio(ratio);
+    this.composer?.setPixelRatio(ratio);
+  }
+
   private applyQuality(): void {
     const profile = this.qualityProfile;
-    this.renderer.shadowMap.enabled = profile.quality !== "low";
+    this.renderer.shadowMap.enabled = profile.useShadows;
     const extent = profile.quality === "high" ? 130 : 95;
     this.environment.setShadowQuality(profile.shadowMapSize, extent);
-    this.environment.sun.castShadow = profile.quality !== "low";
+    this.environment.sun.castShadow = profile.useShadows;
+    this.adaptiveResolution.reset();
     const wantsBloom = profile.quality === "high" && profile.usePostEffects && !this.isMobileViewport();
     if (wantsBloom && !this.composer) {
       this.composer = new EffectComposer(this.renderer);

@@ -60,6 +60,7 @@ import { formatDistance, Hud, MINIMAP_ZOOM_LEVELS, type MinimapOverlay, type Mis
 import { guideReviewFor } from "../../data/guideReviews";
 import { buildArcadeVisualSettings } from "../arcadeVisuals";
 import { WorldRenderer } from "../WorldRenderer";
+import { detectMobile, initialGraphicsQuality, toggleFullscreen, vibrate, WakeLockGuard } from "../../platform/device";
 
 const WAYPOINT_RADIUS_METERS = 35;
 const PICKUP_RADIUS_METERS = 3.4;
@@ -79,6 +80,14 @@ export function parseStartParam(search: string): { lat: number; lng: number } | 
 function createSessionPlayerId(): string {
   const random = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
   return `p-${random}`;
+}
+
+function safeHasSave(): boolean {
+  try {
+    return localStorage.getItem("mosgame.save.v1") !== null;
+  } catch {
+    return true;
+  }
 }
 
 export class GameApp {
@@ -141,6 +150,9 @@ export class GameApp {
   private routeKey = "";
   private lastRouteTime = 0;
   private minimapTarget?: PlaceSummary;
+  private frameCount = 0;
+  private mobile = detectMobile();
+  private readonly wakeLock = new WakeLockGuard();
 
   constructor(private readonly host: HTMLElement) {
     this.host.className = "game-shell";
@@ -153,7 +165,12 @@ export class GameApp {
     this.renderer = new WorldRenderer(this.canvasHost);
     this.renderer.setWorldOriginOffset(this.worldAnchor);
     this.missions = createStarterMissions(this.places);
+    const firstLaunch = !safeHasSave();
     this.save = this.withDailyChallenges(loadSave());
+    if (firstLaunch) {
+      const hints = navigator as Navigator & { deviceMemory?: number };
+      this.save = { ...this.save, settings: { ...this.save.settings, graphicsQuality: initialGraphicsQuality(this.mobile, hints) } };
+    }
     this.applySettings();
     this.applyVehicle(this.save.activeVehicleId);
     const fallback = new CachedPlacesService(bangkokWorld.places);
@@ -179,14 +196,28 @@ export class GameApp {
       onStartRace: () => this.startRace(),
       onJumpToPlayer: (id) => void this.jumpToPlayer(id),
       onCopyInvite: () => void this.copyInvite(),
+      onToggleFullscreen: () => void toggleFullscreen(),
+    });
+    window.addEventListener("resize", () => {
+      this.mobile = detectMobile();
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") {
+        if (this.running && !this.paused) this.setPaused(true);
+        void this.wakeLock.release();
+      } else {
+        this.renderer.resetFrameTimer();
+      }
+    });
+    window.addEventListener("pointerdown", () => {
+      if (!this.paused) void this.wakeLock.request();
     });
     this.refreshPanels(true);
   }
 
   async start(): Promise<void> {
-    await this.refreshPlaces();
-    await this.physics.init();
-    await this.loadMapLayers();
+    void this.physics.init().catch((error) => console.warn("Physics unavailable", error));
+    await Promise.all([this.refreshPlaces(), this.loadMapLayers()]);
     const requestedStart = parseStartParam(window.location.search);
     if (requestedStart) {
       this.worldAnchor = createWorldAnchor(requestedStart, this.worldAnchor.version + 1);
@@ -284,7 +315,11 @@ export class GameApp {
     this.hud.updateDrift(this.drift);
     this.minimapTarget = waypoint;
     this.updateRoute(time, waypoint);
-    this.hud.drawMinimap(this.vehicle.state, this.visiblePlaces, (place) => geoToLocal(place, this.worldAnchor), waypoint, this.minimapOverlay());
+    // Phones redraw the minimap at half rate; it is a full canvas repaint.
+    this.frameCount += 1;
+    if (!this.isMobileViewport() || this.frameCount % 2 === 0) {
+      this.hud.drawMinimap(this.vehicle.state, this.visiblePlaces, (place) => geoToLocal(place, this.worldAnchor), waypoint, this.minimapOverlay());
+    }
     this.updateFastTravelPrompt(waypoint);
     this.renderer.setVisiblePlaces(this.visiblePlaces);
     this.renderer.setActiveWaypoint(waypoint);
@@ -300,6 +335,9 @@ export class GameApp {
 
   private setPaused(paused: boolean): void {
     this.paused = paused;
+    this.renderer.resetFrameTimer();
+    if (paused) void this.wakeLock.release();
+    else void this.wakeLock.request();
     document.body.classList.toggle("paused", paused);
     this.hud.setPaused(paused);
     this.audio.setEnabled(!paused && this.save.settings.soundEnabled);
@@ -656,6 +694,7 @@ export class GameApp {
       if (event.kind === "crash") {
         this.vehicle.applyImpact(event.impactSpeed > 12 ? -0.2 : 0.3);
         this.renderer.triggerImpact(Math.min(1.2, event.impactSpeed / 18));
+        if (!this.save.settings.reduceMotion) vibrate(event.impactSpeed > 12 ? 60 : 30);
         this.audio.playCrash(event.impactSpeed);
         if (this.drift.active) {
           this.drift = createDriftState();
@@ -670,6 +709,7 @@ export class GameApp {
         next = addStat(next, "nearMisses", 1);
         next = this.recordDaily(next, "near_misses", 1);
         this.hud.toast("Near miss!", "+10 XP · ฿ 5 · nitro", "reward");
+        if (!this.save.settings.reduceMotion) vibrate(15);
         this.audio.playNearMiss();
         this.commitSave(next);
       }
@@ -858,7 +898,7 @@ export class GameApp {
     if (playerName !== this.save.settings.playerName || roomCode !== this.save.settings.multiplayerRoom) {
       this.commitSave({ ...this.save, settings: { ...this.save.settings, playerName, multiplayerRoom: roomCode } });
     }
-    const client = this.online.realtimeClient();
+    const client = await this.online.realtimeClient();
     this.transport ??= client ? new SupabaseRealtimeTransport(client) : new LocalTabTransport();
     for (const id of this.remotePlayers.ids()) this.remotePlayers.remove(id);
     await this.transport.join(roomCode, { id: this.playerId, name: playerName }, {
@@ -1199,7 +1239,7 @@ export class GameApp {
   }
 
   private isMobileViewport(): boolean {
-    return window.matchMedia("(pointer: coarse)").matches || Math.min(window.innerWidth, window.innerHeight) <= 520;
+    return this.mobile;
   }
 
   private async loadNearbyPlaces(lat: number, lng: number, radius: number): Promise<void> {

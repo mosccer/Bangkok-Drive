@@ -39,7 +39,9 @@ export class InputController {
   private touchHandbrake = false;
   private touchHorn = false;
   private touchSteer = 0;
-  private touchThrottle = 0;
+  private touchGas = false;
+  private touchBrake = false;
+  private touchBoost = false;
 
   constructor(private readonly root: HTMLElement) {
     window.addEventListener("keydown", this.handleKeyDown);
@@ -53,13 +55,16 @@ export class InputController {
   }
 
   update(): InputActions {
-    this.actions.accelerate = this.pressed.has("KeyW") || this.pressed.has("ArrowUp") || this.touchThrottle > 0;
-    this.actions.brake = this.pressed.has("KeyS") || this.pressed.has("ArrowDown") || this.touchThrottle < 0;
+    this.actions.accelerate = this.pressed.has("KeyW") || this.pressed.has("ArrowUp") || this.touchGas;
+    this.actions.brake = this.pressed.has("KeyS") || this.pressed.has("ArrowDown") || this.touchBrake;
     this.actions.steerLeft = this.pressed.has("KeyA") || this.pressed.has("ArrowLeft") || this.touchSteer < -0.25;
     this.actions.steerRight = this.pressed.has("KeyD") || this.pressed.has("ArrowRight") || this.touchSteer > 0.25;
     this.actions.handbrake = this.pressed.has("Space") || this.touchHandbrake;
-    this.actions.boost = this.pressed.has("ShiftLeft") || this.pressed.has("ShiftRight");
+    this.actions.boost = this.pressed.has("ShiftLeft") || this.pressed.has("ShiftRight") || this.touchBoost;
     this.actions.pause = this.pauseLatch;
+    const keyboardSteer = this.pressed.has("KeyA") || this.pressed.has("ArrowLeft") || this.pressed.has("KeyD") || this.pressed.has("ArrowRight");
+    // Stick right = steer right, which is negative in VehicleController's left-positive convention.
+    this.actions.steerAxis = !keyboardSteer && this.touchSteer !== 0 ? -this.touchSteer : undefined;
     this.pauseLatch = false;
     return { ...this.actions };
   }
@@ -100,6 +105,7 @@ export class InputController {
 
   private installTouchControls(): void {
     const stick = this.root.querySelector<HTMLElement>("[data-control='stick']");
+    const knob = stick?.querySelector<HTMLElement>("span");
     const throttle = this.root.querySelector<HTMLElement>("[data-control='throttle']");
     const brake = this.root.querySelector<HTMLElement>("[data-control='brake']");
     const boost = this.root.querySelector<HTMLElement>("[data-control='boost']");
@@ -108,59 +114,61 @@ export class InputController {
     const camera = this.root.querySelector<HTMLElement>("[data-control='camera']");
     const horn = this.root.querySelector<HTMLElement>("[data-control='horn']");
 
-    stick?.addEventListener("pointermove", (event) => {
-      const rect = stick.getBoundingClientRect();
-      this.touchSteer = ((event.clientX - rect.left) / rect.width - 0.5) * 2;
-    });
-    stick?.addEventListener("pointerleave", () => {
-      this.touchSteer = 0;
-    });
-    stick?.addEventListener("pointerup", () => {
-      this.touchSteer = 0;
-    });
+    // Pointer capture keeps the stick steering when the thumb slides off it.
+    if (stick) {
+      const steerFrom = (event: PointerEvent) => {
+        const rect = stick.getBoundingClientRect();
+        const raw = ((event.clientX - rect.left) / rect.width - 0.5) * 2;
+        const clamped = Math.max(-1, Math.min(1, raw));
+        this.touchSteer = Math.abs(clamped) < 0.12 ? 0 : clamped;
+        if (knob) knob.style.transform = `translateX(${clamped * 34}px)`;
+      };
+      const release = () => {
+        this.touchSteer = 0;
+        if (knob) knob.style.transform = "";
+      };
+      stick.addEventListener("pointerdown", (event) => {
+        stick.setPointerCapture(event.pointerId);
+        steerFrom(event);
+      });
+      stick.addEventListener("pointermove", (event) => {
+        if (stick.hasPointerCapture(event.pointerId)) steerFrom(event);
+      });
+      for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) stick.addEventListener(name, release);
+    }
 
-    throttle?.addEventListener("pointerdown", () => {
-      this.touchThrottle = 1;
+    const hold = (element: HTMLElement | null, set: (down: boolean) => void) => {
+      if (!element) return;
+      element.addEventListener("pointerdown", (event) => {
+        element.setPointerCapture(event.pointerId);
+        element.classList.add("pressed");
+        set(true);
+      });
+      for (const name of ["pointerup", "pointercancel", "lostpointercapture"]) {
+        element.addEventListener(name, () => {
+          element.classList.remove("pressed");
+          set(false);
+        });
+      }
+      element.addEventListener("contextmenu", (event) => event.preventDefault());
+    };
+    hold(throttle, (down) => {
+      this.touchGas = down;
     });
-    throttle?.addEventListener("pointerup", () => {
-      this.touchThrottle = 0;
+    hold(brake, (down) => {
+      this.touchBrake = down;
     });
-    throttle?.addEventListener("pointerleave", () => {
-      this.touchThrottle = 0;
+    hold(boost, (down) => {
+      this.touchBoost = down;
     });
-
-    brake?.addEventListener("pointerdown", () => {
-      this.touchThrottle = -1;
+    hold(drift, (down) => {
+      this.touchHandbrake = down;
     });
-    brake?.addEventListener("pointerup", () => {
-      this.touchThrottle = 0;
-    });
-    brake?.addEventListener("pointerleave", () => {
-      this.touchThrottle = 0;
-    });
-
-    boost?.addEventListener("pointerdown", () => {
-      this.pressed.add("ShiftLeft");
-    });
-    boost?.addEventListener("pointerup", () => {
-      this.pressed.delete("ShiftLeft");
+    hold(horn, (down) => {
+      this.touchHorn = down;
     });
     pause?.addEventListener("click", () => {
       this.pauseLatch = true;
-    });
-    drift?.addEventListener("pointerdown", () => {
-      this.touchHandbrake = true;
-    });
-    for (const eventName of ["pointerup", "pointerleave", "pointercancel"]) {
-      drift?.addEventListener(eventName, () => {
-        this.touchHandbrake = false;
-      });
-      horn?.addEventListener(eventName, () => {
-        this.touchHorn = false;
-      });
-    }
-    horn?.addEventListener("pointerdown", () => {
-      this.touchHorn = true;
     });
     camera?.addEventListener("click", () => {
       this.uiLatches.add("cycleCamera");

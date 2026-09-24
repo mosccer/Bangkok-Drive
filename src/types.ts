@@ -148,6 +148,8 @@ export interface InputActions {
   handbrake: boolean;
   boost: boolean;
   pause: boolean;
+  // Analog steering from touch (-1..1, positive = left). Keyboard input leaves it undefined.
+  steerAxis?: number;
 }
 
 export type GraphicsQuality = "low" | "medium" | "high";
@@ -218,6 +220,7 @@ export interface RenderQualityProfile {
   useBoostTrails: boolean;
   useSkidMarks: boolean;
   useEnhancedMaterials: boolean;
+  useShadows: boolean;
 }
 
 export interface VehicleVisualState {

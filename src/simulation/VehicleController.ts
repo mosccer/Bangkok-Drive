@@ -61,7 +61,7 @@ export class VehicleController {
     this.state.speed = Math.max(-maxReverseSpeed, Math.min(maxForwardSpeed, this.state.speed));
 
     this.state.traction = input.handbrake ? this.vehicleDefinition.stats.drift : this.vehicleDefinition.stats.grip;
-    const steer = (input.steerLeft ? 1 : 0) - (input.steerRight ? 1 : 0);
+    const steer = input.steerAxis ?? (input.steerLeft ? 1 : 0) - (input.steerRight ? 1 : 0);
     const steerStrength = Math.min(1, Math.abs(this.state.speed) / 16) * this.state.traction;
     this.state.rotation += steer * steerStrength * dt * 2.4;
 

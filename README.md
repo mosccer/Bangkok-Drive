@@ -50,6 +50,18 @@ URL options: `?start=13.7405,100.4995` spawns at a location, `?room=friends` joi
 - Settings: graphics quality, time of day, camera, sound, camera shake, speed effects, reduce motion
 - Local save plus Supabase guest auth, cloud save and leaderboard
 
+## Mobile
+
+- Installable PWA (`manifest.webmanifest`, icons): add to the home screen for fullscreen landscape play
+- First launch on low-end phones starts on Low quality; dynamic resolution lowers the render scale when
+  frames get slow and restores it when they recover; shadows are off on mobile Medium
+- Rapier physics (~1.4 MB WASM) and supabase-js load lazily, so the first download is ~225 KB gzipped JS
+- Analog steering stick with pointer capture, multi-touch pedals, drift/camera/horn buttons, haptics
+- Compact icon menu, bottom-sheet panels in portrait and side sheets in landscape, minimap drawn at half
+  rate on phones
+- Auto-pause when the app goes to the background, screen wake lock while driving, fullscreen button with
+  landscape lock (Android)
+
 ## Google Places Integration
 
 The browser client calls `/api/places` and `/api/places/:id` through `GooglePlacesProxyService`.
