@@ -24,13 +24,29 @@ $env:SUPABASE_URL="https://your-project.supabase.co"; $env:SUPABASE_SERVICE_ROLE
 
 Default guards are intentionally conservative: `PLACES_IMPORT_QPS=1`, `PLACES_IMPORT_DAILY_REQUEST_LIMIT=300`, and `MAX_RESULTS_PER_DISTRICT_CATEGORY=60`.
 
-## 1:1 Road Tiles
+## OpenStreetMap Map Import
 
-`npm run osm:import` now targets the central Bangkok 1:1 streaming map:
+`npm run osm:import` builds the streaming map from OpenStreetMap through the Overpass API
+(`scripts/import-osm.ts`, conversion logic in `src/data/osmImport.ts`):
 
-1. Fetch Overpass road data for the prototype zones.
-2. Save raw responses in `public/data/road-chunks`.
-3. Convert roads to meter-scale `RoadTile` JSON files in `public/data/road-tiles`.
-4. Write `public/data/road-tiles/index.json` for `RoadTileStore`.
+1. Split the bounding box into blocks (one Overpass request each, default `0.024°`).
+2. Fetch roads (with `lanes`/`width`/`name`), building footprints (`height`/`building:levels`),
+   water and park polygons, and POIs: Buddhist temples, cafes, bakeries/desserts, museums,
+   attractions, markets and malls.
+3. Cut each block into small streaming tiles (default `0.006°`) in `public/data/road-tiles/*.json`.
+4. Write `public/data/road-tiles/areas.json` (water/parks, split multipolygons re-assembled and simplified),
+   `public/data/osm-places.json` (all imported POIs, including every mapped temple), and `index.json`.
 
-The runtime still has bundled fallback road tiles, so the game can run without generated tile files.
+```powershell
+npm run osm:import -- --dry-run
+npm run osm:import
+npm run osm:import -- --bbox=13.70,100.47,13.82,100.58 --tile=0.006 --block=0.024
+npm run osm:import -- --endpoint=https://overpass.kumi.systems/api/interpreter --with-restaurants
+```
+
+Coordinates use `MAP_SCALE` from `src/data/coordinates.ts`, so imported roads, buildings and places line up
+with the game world. Without generated files the game uses the bundled fallback tiles plus an approximate
+Chao Phraya river and park outlines (`src/data/fallbackMapAreas.ts`).
+
+Map data © OpenStreetMap contributors, available under the Open Database License (ODbL). The HUD shows
+this attribution whenever imported OSM tiles are loaded.

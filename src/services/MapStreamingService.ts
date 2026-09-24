@@ -1,4 +1,4 @@
-import type { RoadTile, RoadTileManifestEntry, StreamingMapState, WorldAnchor, WorldMeters } from "../types";
+import type { MapArea, PlaceSummary, RoadTile, RoadTileManifestEntry, StreamingMapState, WorldAnchor, WorldMeters } from "../types";
 import { RoadTileStore } from "./RoadTileStore";
 
 export interface MapStreamingOptions {
@@ -28,16 +28,22 @@ function tileDistanceToPoint(tile: RoadTileManifestEntry, point: WorldMeters): n
 
 export class MapStreamingService {
   private lastState?: StreamingMapState;
+  private viewRadiusMeters?: number;
 
   constructor(
     private readonly tileStore = new RoadTileStore(),
     private readonly options: MapStreamingOptions = {},
   ) {}
 
+  // Loads tiles within this distance instead of a fixed tile count (OSM tiles are small and dense).
+  setViewRadius(meters?: number): void {
+    this.viewRadiusMeters = meters;
+  }
+
   async update(anchor: WorldAnchor, vehicleWorldMeters: WorldMeters, isMobile: boolean): Promise<StreamingMapState> {
     const manifest = await this.tileStore.loadManifest();
     const tileRadius = isMobile ? (this.options.mobileTileRadius ?? 1) : (this.options.desktopTileRadius ?? 2);
-    const radiusMeters = manifest.tileSizeMeters * tileRadius;
+    const radiusMeters = this.viewRadiusMeters ?? manifest.tileSizeMeters * tileRadius;
     const keep = new Set(this.options.keepTileIds ?? []);
     const activeTile = this.findActiveTile(manifest.tiles, vehicleWorldMeters);
     if (activeTile) keep.add(activeTile.id);
@@ -57,6 +63,18 @@ export class MapStreamingService {
     };
     this.lastState = state;
     return state;
+  }
+
+  loadAreas(): Promise<MapArea[]> {
+    return this.tileStore.loadAreas();
+  }
+
+  loadOsmPlaces(): Promise<PlaceSummary[]> {
+    return this.tileStore.loadOsmPlaces();
+  }
+
+  async attribution(): Promise<string | undefined> {
+    return (await this.tileStore.loadManifest()).attribution;
   }
 
   getLastState(): StreamingMapState | undefined {

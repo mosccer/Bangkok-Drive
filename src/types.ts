@@ -334,6 +334,7 @@ export interface RoadSegment {
   to: string;
   width: number;
   district: string;
+  name?: string;
   kind: "motorway" | "primary" | "secondary" | "tertiary" | "residential" | "service" | "arterial" | "street" | "bridge" | "alley";
 }
 
@@ -354,6 +355,27 @@ export interface RoadChunk {
   landmarks: Landmark[];
 }
 
+export type MapBuildingKind = "temple" | "commercial" | "residential" | "civic" | "industrial" | "generic";
+
+// Footprints are in world meters (already multiplied by MAP_SCALE); heights are real-world meters.
+export interface MapBuilding {
+  id: string;
+  footprint: WorldMeters[];
+  heightMeters: number;
+  kind: MapBuildingKind;
+  name?: string;
+}
+
+export type MapAreaKind = "water" | "park" | "temple_ground";
+
+export interface MapArea {
+  id: string;
+  kind: MapAreaKind;
+  outer: WorldMeters[];
+  holes?: WorldMeters[][];
+  name?: string;
+}
+
 export interface RoadTile {
   id: string;
   boundsLatLng: { south: number; west: number; north: number; east: number };
@@ -361,6 +383,7 @@ export interface RoadTile {
   originMeters: WorldMeters;
   nodes: RoadNode[];
   segments: RoadSegment[];
+  buildings?: MapBuilding[];
   districtIds: string[];
   loadedAt: number;
 }
@@ -378,6 +401,11 @@ export interface RoadTileManifest {
   tileSizeMeters: number;
   generatedAt: string;
   tiles: RoadTileManifestEntry[];
+  source?: "fallback" | "osm";
+  mapScale?: number;
+  areasHref?: string;
+  placesHref?: string;
+  attribution?: string;
 }
 
 export interface StreamingMapState {

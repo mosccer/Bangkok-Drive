@@ -5,10 +5,20 @@ import { createCachedPlaceDetail } from "./placeNormalization";
 export interface PlacesService {
   listSummaries(query?: PlaceQuery): Promise<PlaceListResponse>;
   getDetail(placeId: string, lang?: "th" | "en"): Promise<PlaceDetail | undefined>;
+  addPlaces?(places: PlaceSummary[]): void;
 }
 
 export class CachedPlacesService implements PlacesService {
-  constructor(private readonly places: PlaceSummary[]) {}
+  private places: PlaceSummary[];
+
+  constructor(places: PlaceSummary[]) {
+    this.places = places;
+  }
+
+  addPlaces(places: PlaceSummary[]): void {
+    const known = new Set(this.places.map((place) => place.id));
+    this.places = [...this.places, ...places.filter((place) => !known.has(place.id))];
+  }
 
   async listSummaries(query: PlaceQuery = {}): Promise<PlaceListResponse> {
     return queryPlaces(this.places, query);
@@ -25,6 +35,10 @@ export class GooglePlacesProxyService implements PlacesService {
     private readonly endpoint: string,
     private readonly fallback: PlacesService,
   ) {}
+
+  addPlaces(places: PlaceSummary[]): void {
+    this.fallback.addPlaces?.(places);
+  }
 
   async listSummaries(query: PlaceQuery = {}): Promise<PlaceListResponse> {
     try {

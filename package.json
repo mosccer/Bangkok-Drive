@@ -4,7 +4,7 @@
   "description": "Bangkok open-world racing prototype for desktop and mobile browsers.",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "osm:import": "node scripts/import-osm-road-chunks.mjs",
+    "osm:import": "tsx scripts/import-osm.ts",
     "places:import": "node scripts/import-places.mjs",
     "places:proxy": "node scripts/places-proxy.mjs",
     "build": "tsc && vite build",
@@ -24,9 +24,11 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.60.0",
+    "@types/node": "^22.20.4",
     "@types/three": "^0.184.1",
     "eslint": "^10.4.1",
     "jsdom": "^29.1.1",
+    "tsx": "^4.23.15",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.60.0",
     "vite": "^8.0.14",

@@ -1,5 +1,5 @@
 import type { GeoPoint, RoadSegment, RoadTile, RoadTileManifest } from "../types";
-import { latLngToWorld } from "./coordinates";
+import { latLngToWorld, MAP_SCALE } from "./coordinates";
 
 const TILE_SIZE_METERS = 512;
 const GENERATED_AT = "2026-05-30T00:00:00.000+07:00";
@@ -332,6 +332,8 @@ export const fallbackRoadTileManifest: RoadTileManifest = {
   scaleMode: "real_1_1",
   tileSizeMeters: TILE_SIZE_METERS,
   generatedAt: GENERATED_AT,
+  source: "fallback",
+  mapScale: MAP_SCALE,
   tiles: fallbackRoadTiles.map((tile) => ({
     id: tile.id,
     href: `/data/road-tiles/${tile.id}.json`,

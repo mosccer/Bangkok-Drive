@@ -18,16 +18,21 @@ const GRID_CELL_METERS = 120;
 export const COIN_VALUE = 5;
 export const NITRO_PICKUP_AMOUNT = 0.35;
 
+// OSM roads arrive as many short segments, so trail count is proportional to length with a
+// deterministic chance for the fractional remainder.
 export function generateSegmentCollectibles(segment: WorldRoadSegment): Collectible[] {
-  if (segment.kind === "service" || segment.kind === "alley" || segment.length < 60) return [];
+  if (segment.kind === "service" || segment.kind === "alley" || segment.length < 20) return [];
   const fx = (segment.bx - segment.ax) / segment.length;
   const fz = (segment.bz - segment.az) / segment.length;
   const left = leftOf(fx, fz);
   const items: Collectible[] = [];
-  const trailCount = Math.floor((segment.length - 30) / TRAIL_SPACING_METERS);
+  const expected = segment.length / TRAIL_SPACING_METERS;
+  const baseHash = hashString(`${segment.tileId}:${segment.id}`);
+  const trailCount = Math.floor(expected) + ((baseHash % 1000) / 1000 < expected % 1 ? 1 : 0);
+  const spacing = segment.length / Math.max(1, trailCount);
   for (let trail = 0; trail < trailCount; trail += 1) {
     const hash = hashString(`${segment.tileId}:${segment.id}:${trail}`);
-    const start = 30 + trail * TRAIL_SPACING_METERS + (hash % 40);
+    const start = Math.min(segment.length - 4, trail * spacing + 4 + (hash % Math.max(1, Math.floor(spacing / 3))));
     const lateral = ((((hash >>> 8) % 100) / 100) * 2 - 1) * Math.max(0, segment.width / 2 - 2.2);
     if (hash % 4 === 0) {
       items.push({
@@ -40,7 +45,7 @@ export function generateSegmentCollectibles(segment: WorldRoadSegment): Collecti
     }
     for (let i = 0; i < COINS_PER_TRAIL; i += 1) {
       const along = start + i * COIN_GAP_METERS;
-      if (along > segment.length - 10) break;
+      if (along > segment.length - 2) break;
       items.push({
         id: `${segment.tileId}:${segment.id}:${trail}:${i}`,
         kind: "coin",

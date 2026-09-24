@@ -1,6 +1,6 @@
 import * as THREE from "three";
 
-function makeCanvasTexture(size: number, draw: (ctx: CanvasRenderingContext2D, size: number) => void): THREE.CanvasTexture {
+function makeCanvasTexture(size: number, draw: (ctx: CanvasRenderingContext2D, size: number) => void, colorSpace = THREE.SRGBColorSpace): THREE.CanvasTexture {
   const canvas = document.createElement("canvas");
   canvas.width = size;
   canvas.height = size;
@@ -10,42 +10,66 @@ function makeCanvasTexture(size: number, draw: (ctx: CanvasRenderingContext2D, s
   }
   draw(ctx, size);
   const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.colorSpace = colorSpace;
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
-  texture.anisotropy = 4;
+  texture.anisotropy = 8;
   return texture;
 }
 
+function seeded(seed: number): () => number {
+  let value = seed;
+  return () => {
+    value = (value * 16807) % 2147483647;
+    return value / 2147483647;
+  };
+}
+
+// Textures carry the colour; material colours stay white so they don't darken the map twice.
 export function createAsphaltMaterial(highDetail: boolean): THREE.MeshStandardMaterial {
-  const map = makeCanvasTexture(highDetail ? 256 : 128, (ctx, size) => {
-    ctx.fillStyle = "#343b3e";
+  const random = seeded(11);
+  const map = makeCanvasTexture(highDetail ? 512 : 256, (ctx, size) => {
+    ctx.fillStyle = "#4b5256";
     ctx.fillRect(0, 0, size, size);
-    for (let i = 0; i < size * (highDetail ? 3 : 2); i += 1) {
-      const shade = 44 + ((i * 17) % 58);
-      ctx.fillStyle = `rgba(${shade}, ${shade + 3}, ${shade + 5}, 0.28)`;
-      ctx.fillRect((i * 37) % size, (i * 19) % size, 1 + (i % 3), 1 + ((i + 1) % 3));
+    for (let i = 0; i < size * size * 0.06; i += 1) {
+      const shade = 58 + Math.floor(random() * 50);
+      ctx.fillStyle = `rgba(${shade}, ${shade + 2}, ${shade + 4}, ${0.25 + random() * 0.35})`;
+      ctx.fillRect(random() * size, random() * size, 1 + random() * 2, 1 + random() * 2);
     }
-    ctx.strokeStyle = "rgba(8, 11, 13, 0.18)";
-    ctx.lineWidth = highDetail ? 3 : 2;
-    for (let x = size * 0.28; x < size; x += size * 0.42) {
+    for (let i = 0; i < 6; i += 1) {
+      ctx.fillStyle = `rgba(20, 24, 28, ${0.08 + random() * 0.1})`;
       ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.bezierCurveTo(x + size * 0.04, size * 0.28, x - size * 0.05, size * 0.7, x + size * 0.02, size);
+      ctx.ellipse(random() * size, random() * size, 10 + random() * 40, 6 + random() * 18, random() * Math.PI, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.strokeStyle = "rgba(15, 18, 20, 0.35)";
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 4; i += 1) {
+      let x = random() * size;
+      let y = random() * size;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      for (let step = 0; step < 6; step += 1) {
+        x += (random() - 0.5) * 30;
+        y += (random() - 0.5) * 30;
+        ctx.lineTo(x, y);
+      }
       ctx.stroke();
     }
-    ctx.fillStyle = "rgba(255, 229, 150, 0.08)";
-    ctx.fillRect(0, size * 0.47, size, highDetail ? 2 : 1);
   });
-  map.repeat.set(10, 1);
-  return new THREE.MeshStandardMaterial({ color: "#424a4d", map, roughness: 0.8, metalness: 0.025 });
+  return new THREE.MeshStandardMaterial({ color: "#ffffff", map, roughness: 0.86, metalness: 0.02 });
+}
+
+export function createBridgeMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color: "#8a939a", roughness: 0.6, metalness: 0.12 });
 }
 
 export function createSidewalkMaterial(): THREE.MeshStandardMaterial {
   const map = makeCanvasTexture(128, (ctx, size) => {
-    ctx.fillStyle = "#73746e";
+    ctx.fillStyle = "#b9b6ad";
     ctx.fillRect(0, 0, size, size);
-    ctx.strokeStyle = "rgba(255,255,255,0.16)";
+    ctx.strokeStyle = "rgba(70, 66, 60, 0.35)";
+    ctx.lineWidth = 2;
     for (let i = 0; i <= size; i += 32) {
       ctx.beginPath();
       ctx.moveTo(i, 0);
@@ -54,48 +78,118 @@ export function createSidewalkMaterial(): THREE.MeshStandardMaterial {
       ctx.lineTo(size, i);
       ctx.stroke();
     }
+    ctx.fillStyle = "rgba(160, 60, 50, 0.22)";
+    ctx.fillRect(0, 0, size, 10);
   });
-  map.repeat.set(3, 1);
-  return new THREE.MeshStandardMaterial({ color: "#8a8a80", map, roughness: 0.78 });
+  return new THREE.MeshStandardMaterial({ color: "#ffffff", map, roughness: 0.82 });
+}
+
+export function createMarkingMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color: "#ffffff", vertexColors: true, roughness: 0.55, emissive: "#ffffff", emissiveIntensity: 0.05 });
 }
 
 export function createWaterMaterial(): THREE.MeshStandardMaterial {
-  const map = makeCanvasTexture(128, (ctx, size) => {
+  const map = makeCanvasTexture(256, (ctx, size) => {
     const gradient = ctx.createLinearGradient(0, 0, size, size);
-    gradient.addColorStop(0, "#2f7287");
-    gradient.addColorStop(1, "#184a63");
+    gradient.addColorStop(0, "#4f8a8b");
+    gradient.addColorStop(1, "#3b6f78");
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, size, size);
-    ctx.strokeStyle = "rgba(190,235,255,0.22)";
-    for (let y = 12; y < size; y += 22) {
+    const random = seeded(5);
+    ctx.strokeStyle = "rgba(220, 245, 255, 0.28)";
+    for (let i = 0; i < 70; i += 1) {
+      const x = random() * size;
+      const y = random() * size;
+      ctx.lineWidth = 1 + random() * 1.5;
       ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.bezierCurveTo(size * 0.25, y - 8, size * 0.6, y + 8, size, y);
+      ctx.moveTo(x, y);
+      ctx.quadraticCurveTo(x + 8, y - 3, x + 16 + random() * 10, y);
       ctx.stroke();
     }
   });
-  map.repeat.set(2, 10);
-  return new THREE.MeshStandardMaterial({ color: "#2e7189", map, roughness: 0.32, metalness: 0.18 });
+  map.repeat.set(1 / 60, 1 / 60);
+  return new THREE.MeshStandardMaterial({ color: "#ffffff", map, roughness: 0.16, metalness: 0.35, envMapIntensity: 1.2 });
 }
 
-export function createBuildingMaterial(color: string, highDetail: boolean): THREE.MeshStandardMaterial {
-  const map = makeCanvasTexture(highDetail ? 128 : 64, (ctx, size) => {
-    ctx.fillStyle = color;
+export function createGrassMaterial(): THREE.MeshStandardMaterial {
+  const random = seeded(23);
+  const map = makeCanvasTexture(256, (ctx, size) => {
+    ctx.fillStyle = "#5b8a3c";
     ctx.fillRect(0, 0, size, size);
-    const cols = 4;
-    const rows = 8;
-    const cellW = size / cols;
-    const cellH = size / rows;
-    for (let y = 1; y < rows - 1; y += 1) {
+    for (let i = 0; i < 4000; i += 1) {
+      const g = 110 + Math.floor(random() * 60);
+      ctx.fillStyle = `rgba(${60 + Math.floor(random() * 40)}, ${g}, ${40 + Math.floor(random() * 30)}, 0.5)`;
+      ctx.fillRect(random() * size, random() * size, 1.5, 3);
+    }
+  });
+  map.repeat.set(1 / 25, 1 / 25);
+  return new THREE.MeshStandardMaterial({ color: "#ffffff", map, roughness: 0.95 });
+}
+
+export function createGroundMaterial(): THREE.MeshStandardMaterial {
+  const random = seeded(31);
+  const map = makeCanvasTexture(256, (ctx, size) => {
+    ctx.fillStyle = "#6d7a5c";
+    ctx.fillRect(0, 0, size, size);
+    for (let i = 0; i < 3000; i += 1) {
+      const tone = random();
+      ctx.fillStyle = tone > 0.6 ? "rgba(120, 112, 90, 0.35)" : "rgba(78, 104, 62, 0.35)";
+      ctx.fillRect(random() * size, random() * size, 2 + random() * 3, 2 + random() * 3);
+    }
+  });
+  map.repeat.set(60, 60);
+  return new THREE.MeshStandardMaterial({ color: "#ffffff", map, roughness: 0.95 });
+}
+
+export interface FacadeMaterials {
+  walls: THREE.MeshStandardMaterial;
+  roofs: THREE.MeshStandardMaterial;
+}
+
+// One shared façade: window grid in the colour map, lit windows in the emissive map (night glow).
+export function createFacadeMaterials(highDetail: boolean): FacadeMaterials {
+  const size = highDetail ? 256 : 128;
+  const cols = 4;
+  const rows = 4;
+  const random = seeded(47);
+  const lit: boolean[] = [];
+  for (let i = 0; i < cols * rows; i += 1) lit.push(random() > 0.45);
+  const drawWindows = (ctx: CanvasRenderingContext2D, textureSize: number, emissive: boolean) => {
+    ctx.fillStyle = emissive ? "#000000" : "#ffffff";
+    ctx.fillRect(0, 0, textureSize, textureSize);
+    const cellW = textureSize / cols;
+    const cellH = textureSize / rows;
+    for (let y = 0; y < rows; y += 1) {
       for (let x = 0; x < cols; x += 1) {
-        if ((x + y) % 5 === 0) continue;
-        ctx.fillStyle = (x + y) % 3 === 0 ? "rgba(255, 230, 155, 0.34)" : "rgba(180, 220, 232, 0.3)";
-        ctx.fillRect(x * cellW + cellW * 0.22, y * cellH + cellH * 0.22, cellW * 0.46, cellH * 0.34);
+        const index = y * cols + x;
+        if (emissive) {
+          if (!lit[index]) continue;
+          ctx.fillStyle = index % 3 === 0 ? "#ffd89a" : "#fff1c9";
+        } else {
+          ctx.fillStyle = "#5d7482";
+        }
+        ctx.fillRect(x * cellW + cellW * 0.18, y * cellH + cellH * 0.22, cellW * 0.64, cellH * 0.5);
+        if (!emissive) {
+          ctx.fillStyle = "rgba(255,255,255,0.25)";
+          ctx.fillRect(x * cellW + cellW * 0.18, y * cellH + cellH * 0.22, cellW * 0.64, cellH * 0.08);
+          ctx.fillStyle = "rgba(0,0,0,0.12)";
+          ctx.fillRect(x * cellW, y * cellH + cellH * 0.86, cellW, cellH * 0.06);
+        }
       }
     }
-    ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
-    ctx.fillRect(0, 0, size, highDetail ? 3 : 2);
+  };
+  const map = makeCanvasTexture(size, (ctx, textureSize) => drawWindows(ctx, textureSize, false));
+  const emissiveMap = makeCanvasTexture(size, (ctx, textureSize) => drawWindows(ctx, textureSize, true));
+  const walls = new THREE.MeshStandardMaterial({
+    color: "#ffffff",
+    map,
+    emissive: "#ffffff",
+    emissiveMap,
+    emissiveIntensity: 0,
+    vertexColors: true,
+    roughness: 0.62,
+    metalness: 0.08,
   });
-  map.repeat.set(1, 2);
-  return new THREE.MeshStandardMaterial({ color, map, roughness: 0.48, metalness: highDetail ? 0.14 : 0.08 });
+  const roofs = new THREE.MeshStandardMaterial({ color: "#ffffff", vertexColors: true, roughness: 0.9 });
+  return { walls, roofs };
 }

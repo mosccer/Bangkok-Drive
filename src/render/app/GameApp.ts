@@ -3,6 +3,7 @@ import { GameAudio } from "../../audio/GameAudio";
 import { bangkokWorld } from "../../data/bangkokWorld";
 import {
   createWorldAnchor,
+  distanceMetersBetweenGeo,
   geoToLocal,
   localToGeo,
   localToWorldMeters,
@@ -60,6 +61,15 @@ const WAYPOINT_RADIUS_METERS = 35;
 const PICKUP_RADIUS_METERS = 3.4;
 const CAMERA_MODES: CameraMode[] = ["chase", "far", "hood", "drone"];
 const cameraModeLabels: Record<CameraMode, string> = { chase: "Chase cam", far: "Far chase cam", hood: "Hood cam", drone: "Drone cam" };
+
+// `?start=13.7400,100.4970` spawns the car at a lat/lng (handy for sharing spots and testing districts).
+export function parseStartParam(search: string): { lat: number; lng: number } | undefined {
+  const value = new URLSearchParams(search).get("start");
+  if (!value) return undefined;
+  const [lat, lng] = value.split(",").map(Number);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < 13.4 || lat > 14.1 || lng < 100.2 || lng > 100.95) return undefined;
+  return { lat, lng };
+}
 
 export class GameApp {
   private readonly canvasHost: HTMLDivElement;
@@ -141,7 +151,13 @@ export class GameApp {
   async start(): Promise<void> {
     await this.refreshPlaces();
     await this.physics.init();
-    const startOnRoad = geoToLocal({ lat: 13.752, lng: 100.4928 }, this.worldAnchor);
+    await this.loadMapLayers();
+    const requestedStart = parseStartParam(window.location.search);
+    if (requestedStart) {
+      this.worldAnchor = createWorldAnchor(requestedStart, this.worldAnchor.version + 1);
+      this.renderer.setWorldOriginOffset(this.worldAnchor);
+    }
+    const startOnRoad = geoToLocal(requestedStart ?? { lat: 13.752, lng: 100.4928 }, this.worldAnchor);
     this.vehicle.teleportLocal(startOnRoad.x, startOnRoad.z, Math.PI / 2, 0);
     await this.updateStreaming(true);
     this.profile = await this.online.ensureProfile();
@@ -666,6 +682,8 @@ export class GameApp {
     this.audio.setEnabled(settings.soundEnabled && !this.paused);
     const mobile = this.isMobileViewport();
     this.traffic.setMaxCars(settings.graphicsQuality === "low" ? 8 : mobile ? 10 : 16);
+    const viewRadius = { low: 700, medium: 1_000, high: 1_400 }[settings.graphicsQuality];
+    this.mapStreaming.setViewRadius(mobile ? Math.min(viewRadius, 800) : viewRadius);
   }
 
   private minimapOverlay(): MinimapOverlay {
@@ -805,6 +823,7 @@ export class GameApp {
       this.renderer.setVisibleRoadTiles(state.loadedTiles);
       this.physics.setRoadTiles(state.loadedTiles, this.worldAnchor);
       this.setRoadTiles(state.loadedTiles);
+      this.renderer.updateAreas(this.vehicle.state.position);
       const geo = localToGeo(this.vehicle.state.position, this.worldAnchor);
       void this.loadNearbyPlaces(geo.lat, geo.lng, isMobile ? 1_500 : 2_500);
     })().finally(() => {
@@ -812,6 +831,35 @@ export class GameApp {
     });
 
     return this.streamInFlight;
+  }
+
+  private async loadMapLayers(): Promise<void> {
+    const [areas, osmPlaces, attribution] = await Promise.all([
+      this.mapStreaming.loadAreas(),
+      this.mapStreaming.loadOsmPlaces(),
+      this.mapStreaming.attribution(),
+    ]);
+    this.renderer.setMapAreas(areas);
+    this.hud.setMapAttribution(attribution);
+    if (osmPlaces.length) {
+      this.mergePlaces(osmPlaces);
+    }
+  }
+
+  // Curated entries win over OSM duplicates (same name within 150 m) so guide reviews stay attached.
+  private mergePlaces(incoming: PlaceSummary[]): void {
+    const byId = new Map(this.places.map((place) => [place.id, place]));
+    const curated = this.places.filter((place) => place.source === "curated");
+    for (const place of incoming) {
+      const duplicate = curated.some(
+        (existing) =>
+          distanceMetersBetweenGeo(existing, place) < 150 &&
+          (existing.nameTh === place.nameTh || (existing.nameEn && existing.nameEn.toLowerCase() === place.nameEn?.toLowerCase())),
+      );
+      if (!duplicate && !byId.has(place.id)) byId.set(place.id, place);
+    }
+    this.places = [...byId.values()];
+    this.placesService.addPlaces?.(incoming);
   }
 
   private setRoadTiles(tiles: RoadTile[]): void {

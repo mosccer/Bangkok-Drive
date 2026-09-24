@@ -71,6 +71,8 @@ export class PhysicsWorld {
     const byId = new Map(tile.nodes.map((nodeValue) => [nodeValue.id, nodeValue]));
     const bodies: RAPIER.RigidBody[] = [];
     for (const segment of tile.segments) {
+      // Dense OSM tiles have thousands of minor segments; only main roads get colliders.
+      if (segment.kind === "residential" || segment.kind === "service" || segment.kind === "alley") continue;
       const from = byId.get(segment.from);
       const to = byId.get(segment.to);
       if (!from || !to) continue;

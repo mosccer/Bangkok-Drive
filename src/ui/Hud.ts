@@ -190,6 +190,7 @@ export class Hud {
         <button data-ui="preset-temple">Temples</button>
       </div>
       <div class="rotate-hint">Rotate for landscape driving</div>
+      <div class="map-attribution hidden" data-ui="map-attribution"></div>
       <button class="poi-prompt hidden" data-ui="poi-prompt"></button>
       <aside class="poi-drawer" data-ui="drawer" aria-live="polite">
         <div class="drawer-head">
@@ -324,6 +325,12 @@ export class Hud {
         (event.currentTarget as HTMLElement).blur();
       });
     }
+  }
+
+  setMapAttribution(text?: string): void {
+    const label = this.mustFind("[data-ui='map-attribution']");
+    label.textContent = text ? `Map data ${text}` : "";
+    label.classList.toggle("hidden", !text);
   }
 
   setHandlers(handlers: HudHandlers): void {
