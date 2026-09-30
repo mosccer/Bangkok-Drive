@@ -38,10 +38,19 @@ URL options: `?start=13.7405,100.4995` spawns at a location, `?room=friends` joi
 - Without an OSM import the whole of inner Bangkok (~28 × 22 km, lat 13.665–13.86, lng 100.405–100.665) is
   generated on demand: ~45 hand-traced main roads and river bridges (`src/data/bangkokArteries.ts`) plus a
   jittered superblock grid with sois, cut by the Chao Phraya and parks (`src/data/proceduralCity.ts`)
-- Every street is lined and every block filled with buildings (`src/data/cityBuildings.ts`): shophouses with
-  awnings and signs, townhouses, houses with pitched roofs, condo and office towers with podiums and crowns,
-  hotels, malls, temples with tiered roofs, schools, hospitals, markets, warehouses; each has a name, floors,
-  address, year built and tenants. Cars collide with buildings
+- Every street is lined and every block filled with buildings (`src/data/cityBuildings.ts`): street-front
+  rows, back rows and block infill with fallbacks so corners and courtyards fill up (~300+ per tile).
+  Shophouses, townhouses, houses, condos, offices, hotels, malls, temples, schools, hospitals, markets and
+  warehouses each have a name, floors, address, year built and tenants. Cars collide with buildings
+- Building looks: an 8-style façade texture atlas (shopfronts with shutters and goods, grilled shophouse
+  windows with AC units and plants, condo balconies, glass curtain walls, ribbon windows, shuttered houses,
+  corrugated warehouses, ornate temple walls) sampled per vertex in one draw call; podium / setback / slab
+  towers with box crowns, masts, helipads or rooftop pools; parapets, water tanks and rooftop billboards;
+  awnings, shop signs, blade signs and wall-mounted AC units on shophouses; tiered temple roofs with gold
+  spires; concrete power poles with sagging overhead wires along the streets
+- Loading screen with real progress (map data, roads, buildings, profile, online room, shader warm-up) and
+  tips; a lighter overlay while fast travel rebuilds the destination
+- City tiles are generated in a Web Worker and tile meshes are built in small steps per frame
 - Full-screen map: pan, pinch/wheel zoom, street and building detail when zoomed in, place search, tap to
   pin any spot, navigate / warp / favorite, favorites and recent destinations saved with the game
 - Turn-by-turn navigation: road route drawn on the street as a scrolling chevron ribbon, next turn, distance
