@@ -1,16 +1,41 @@
-import type { CameraMode, DailyChallengeKind, MapArea, Mission, WorldMeters, PlaceQuery, PlaceSummary, PlayerProfile, RoadTile, SaveGame, UpgradeSlot, VehicleDefinition } from "../../types";
+import type {
+  CameraMode,
+  DailyChallengeKind,
+  MapArea,
+  MapBuilding,
+  Mission,
+  NavTarget,
+  WorldMeters,
+  PlaceQuery,
+  PlaceSummary,
+  PlayerProfile,
+  RoadTile,
+  SaveGame,
+  UpgradeSlot,
+  VehicleDefinition,
+} from "../../types";
 import { GameAudio } from "../../audio/GameAudio";
 import { bangkokWorld } from "../../data/bangkokWorld";
 import {
   createWorldAnchor,
   distanceMetersBetweenGeo,
   geoToLocal,
+  latLngToWorld,
   localToGeo,
   localToWorldMeters,
   recenterAnchor,
   shouldRecenter,
   worldMetersToLocal,
+  worldToLatLng,
 } from "../../data/coordinates";
+import { describeBuilding } from "../../data/buildingDetails";
+import { CITY_RECT, districtAt, majorRoadsInRect, piecesInRect } from "../../data/proceduralCity";
+import { BuildingIndex, type IndexedBuilding } from "../../simulation/buildingIndex";
+import { resolveBuildingCollision } from "../../simulation/buildingCollision";
+import { closestPointOnSegment, polygonCentroid } from "../../simulation/geometry2d";
+import { formatEta, hasArrived, maneuverLabels, placeToNavTarget, routeProgress } from "../../simulation/navigation";
+import { PedestrianSystem } from "../../simulation/pedestrians";
+import { WorldMap, type MapRoad } from "../../ui/WorldMap";
 import { getVehicleDefinition, isVehicleUnlocked, vehicleDefinitions } from "../../data/vehicles";
 import { InputController, type UiActions } from "../../input/InputController";
 import { PhysicsWorld } from "../../physics/PhysicsWorld";
@@ -44,7 +69,7 @@ import { addNitro, createNitroState, nitroTuningForLevel, updateNitro, type Nitr
 import { levelForXp, levelUpCoinBonus } from "../../simulation/progression";
 import { nearestRoadPoint, roadSegmentsForTiles, yawForDirection, type WorldRoadSegment } from "../../simulation/roadGeometry";
 import { buildRoadGraph, findRoute, type RoadGraph } from "../../simulation/routing";
-import { loadSave, mergeCloudSave, saveGame } from "../../simulation/saveGame";
+import { loadSave, mergeCloudSave, pushRecent, saveGame, toggleFavorite } from "../../simulation/saveGame";
 import { matchesPlaceCategory, placeDisplayName } from "../../simulation/placeQueries";
 import { mpsToKmh } from "../../simulation/speed";
 import { TrafficSystem } from "../../simulation/traffic";
@@ -63,6 +88,7 @@ import { WorldRenderer } from "../WorldRenderer";
 import { detectMobile, initialGraphicsQuality, toggleFullscreen, vibrate, WakeLockGuard } from "../../platform/device";
 
 const WAYPOINT_RADIUS_METERS = 35;
+const CAR_RADIUS = 1.9;
 const PICKUP_RADIUS_METERS = 3.4;
 const CAMERA_MODES: CameraMode[] = ["chase", "far", "hood", "drone"];
 const cameraModeLabels: Record<CameraMode, string> = { chase: "Chase cam", far: "Far chase cam", hood: "Hood cam", drone: "Drone cam" };
@@ -142,14 +168,26 @@ export class GameApp {
   private statsFlushTimer = 0;
   private panelsDirty = true;
   private lastPanelRefresh = 0;
-  private guideTarget?: PlaceSummary;
+  private navTarget?: NavTarget;
+  private missionGuidanceHidden = false;
   private lastGuideRefresh = 0;
+  private readonly buildingIndex = new BuildingIndex();
+  private readonly pedestrians = new PedestrianSystem();
+  private readonly worldMap: WorldMap;
+  private readonly mapBuildings = new Map<string, MapBuilding>();
+  private selectedBuildingId?: string;
+  private routeEnd?: WorldMeters;
+  private lastWallHit = 0;
+  private lastLocationRefresh = 0;
+  private lastDistrictId = "";
+  private mapSource?: string;
   private mapAreas: MapArea[] = [];
   private roadGraph?: RoadGraph;
   private routeWorld?: WorldMeters[];
   private routeKey = "";
   private lastRouteTime = 0;
-  private minimapTarget?: PlaceSummary;
+  private minimapTarget?: NavTarget;
+  private currentWaypoint?: NavTarget;
   private frameCount = 0;
   private mobile = detectMobile();
   private readonly wakeLock = new WakeLockGuard();
@@ -189,7 +227,7 @@ export class GameApp {
         this.refreshGuide();
       },
       onNavigate: (placeId) => this.navigateTo(placeId),
-      onCancelNavigation: () => this.clearNavigation(),
+      onCancelNavigation: () => this.clearNavigation(true),
       onOpenPlace: (placeId) => void this.openPlace(placeId),
       onJoinRoom: (name, room) => void this.joinRoom(name, room),
       onEmote: (emote) => this.sendEmote(emote),
@@ -197,7 +235,12 @@ export class GameApp {
       onJumpToPlayer: (id) => void this.jumpToPlayer(id),
       onCopyInvite: () => void this.copyInvite(),
       onToggleFullscreen: () => void toggleFullscreen(),
+      onOpenMap: () => this.toggleMap(true),
+      onBuildingAction: (action, buildingId) => this.buildingAction(action, buildingId),
+      onCloseDetail: () => this.clearBuildingSelection(),
     });
+    this.worldMap = this.createWorldMap();
+    this.installBuildingPicking();
     window.addEventListener("resize", () => {
       this.mobile = detectMobile();
     });
@@ -226,6 +269,8 @@ export class GameApp {
     const startOnRoad = geoToLocal(requestedStart ?? { lat: 13.752, lng: 100.4928 }, this.worldAnchor);
     this.vehicle.teleportLocal(startOnRoad.x, startOnRoad.z, Math.PI / 2, 0);
     await this.updateStreaming(true);
+    this.snapToRoad();
+    this.renderer.flushTileBuilds(this.vehicle.state.position, 900);
     this.profile = await this.online.ensureProfile();
     const cloud = await this.online.loadCloudSave(this.profile.id);
     this.save = this.withDailyChallenges(mergeCloudSave(this.save, cloud));
@@ -234,7 +279,7 @@ export class GameApp {
     this.applyVehicle(this.save.activeVehicleId);
     this.refreshPanels(true);
     await this.joinRoom();
-    this.hud.toast("Welcome to Bangkok", "Shift = nitro · Space = drift · J = missions", "info");
+    this.hud.toast("Welcome to Bangkok", "N = แผนที่ปักหมุด · คลิกตึกดูรายละเอียด · J = missions", "info");
     this.running = true;
     requestAnimationFrame(this.tick);
   }
@@ -253,11 +298,12 @@ export class GameApp {
     const actions = this.input.update();
     const ui = this.input.consumeUiActions();
     if (actions.pause) {
-      this.setPaused(!this.paused);
+      if (this.worldMap.isOpen) this.toggleMap(false);
+      else this.setPaused(!this.paused);
     }
     this.handleUiActions(ui);
 
-    if (!this.paused) {
+    if (!this.paused && !this.worldMap.isOpen) {
       const steering = actions.steerLeft !== actions.steerRight;
       const drifting = isDrifting({ handbrake: actions.handbrake, steering, speedMps: this.vehicle.state.speed });
       const nitroUpdate = updateNitro(
@@ -270,11 +316,13 @@ export class GameApp {
       this.nitroActive = nitroUpdate.active;
       const vehicleState = this.vehicle.update(dt, { ...actions, boost: nitroUpdate.active });
       this.recenterIfNeeded();
+      this.collideWithBuildings(time);
       this.physics.syncVehicle(vehicleState.position.x, vehicleState.position.y, vehicleState.position.z, vehicleState.rotation);
       this.physics.step();
       this.updateDriftScore(dt, actions.handbrake, steering);
       this.updatePickups(time);
       this.updateTraffic(dt);
+      this.updatePedestrians(dt);
       this.trackDriving(dt);
       this.checkDiscovery();
       this.checkMissionProgress();
@@ -294,12 +342,14 @@ export class GameApp {
     const progress = ensureMissionProgress(this.save, activeMission);
     const missionStop = activeWaypoint(activeMission, progress, this.places);
     const raceTarget = this.race && this.race.closedAt === undefined ? this.places.find((place) => place.id === this.race?.targetId) : undefined;
-    const waypoint = raceTarget ?? this.guideTarget ?? missionStop;
+    const missionTarget = missionStop && !this.missionGuidanceHidden ? placeToNavTarget(missionStop) : undefined;
+    const waypoint = raceTarget ? placeToNavTarget(raceTarget) : (this.navTarget ?? missionTarget);
+    this.currentWaypoint = waypoint;
     const waypointLocal = waypoint ? geoToLocal(waypoint, this.worldAnchor) : undefined;
     if (raceTarget) {
       this.updateRace(time, raceTarget);
     } else {
-      this.updateNavigation(waypointLocal);
+      this.updateNavigation(waypointLocal, missionTarget);
     }
     if (this.hud.isPanelOpen("guide") && time - this.lastGuideRefresh > 1500) {
       this.refreshGuide(true);
@@ -318,18 +368,21 @@ export class GameApp {
     // Phones redraw the minimap at half rate; it is a full canvas repaint.
     this.frameCount += 1;
     if (!this.isMobileViewport() || this.frameCount % 2 === 0) {
-      this.hud.drawMinimap(this.vehicle.state, this.visiblePlaces, (place) => geoToLocal(place, this.worldAnchor), waypoint, this.minimapOverlay());
+      this.hud.drawMinimap(this.vehicle.state, this.visiblePlaces, (point) => geoToLocal(point, this.worldAnchor), waypoint, this.minimapOverlay());
     }
     this.updateFastTravelPrompt(waypoint);
     this.renderer.setVisiblePlaces(this.visiblePlaces);
     this.renderer.setActiveWaypoint(waypoint);
     this.updateMultiplayer(time);
+    this.updateLocation(time);
+    this.worldMap.tick(time);
     if (this.panelsDirty && time - this.lastPanelRefresh > 1000 && !this.hud.isPointerOverPanel()) {
       this.refreshPanels();
     }
     void this.maybeOpenNearbyDetail(nearby);
     void this.tickOnline(time);
-    this.renderer.render();
+    // The full-screen map covers the 3D view, so skip drawing it while the map is open.
+    if (!this.worldMap.isOpen) this.renderer.render();
     requestAnimationFrame(this.tick);
   };
 
@@ -363,6 +416,9 @@ export class GameApp {
     if (ui.respawn && !this.paused) {
       this.respawnOnRoad();
     }
+    if (ui.toggleMap && !this.paused) this.toggleMap(!this.worldMap.isOpen);
+    if (ui.cancelNavigation && !this.paused) this.clearNavigation(true);
+    if (ui.inspectBuilding && !this.paused && !this.worldMap.isOpen) this.inspectBuildingAhead();
   }
 
   // Every save mutation that can move XP, coins or unlocks goes through here so level-ups,
@@ -467,43 +523,82 @@ export class GameApp {
   private navigateTo(placeId: string): void {
     const place = this.places.find((candidate) => candidate.id === placeId);
     if (!place) return;
-    this.guideTarget = place;
-    this.hud.toast(`นำทางไป ${placeDisplayName(place)}`, "ตามเข็มทิศและเส้นบนแผนที่ · กด × เพื่อยกเลิก", "info");
-    this.audio.playUi();
+    this.setNavTarget(placeToNavTarget(place));
   }
 
-  private clearNavigation(): void {
+  private setNavTarget(target: NavTarget): void {
+    if (this.race && this.race.closedAt === undefined) {
+      this.hud.toast("กำลังแข่งอยู่", "ยกเลิกการแข่งก่อนตั้งจุดหมายใหม่", "warning");
+      return;
+    }
+    this.navTarget = target;
+    this.routeKey = "";
+    this.routeEnd = undefined;
+    this.commitSave({ ...this.save, navigation: pushRecent(this.save.navigation, target) });
+    this.hud.toast(`นำทางไป ${target.label}`, "ตามเส้นบนถนนและเข็มทิศ · กด X หรือ × เพื่อยกเลิก", "info");
+    this.audio.playUi();
+    this.worldMap.refresh();
+  }
+
+  // Cancels a custom destination or race; with nothing custom active it hides the mission route.
+  private clearNavigation(userAction = false): void {
     if (this.race && this.race.closedAt === undefined) {
       this.race = { ...this.race, closedAt: performance.now() };
       this.hud.setCountdown(undefined);
       this.hud.toast("ออกจากการแข่งแล้ว", "", "info");
+    } else if (this.navTarget) {
+      if (userAction) this.hud.toast("ยกเลิกเส้นทางแล้ว", "เปิดแผนที่ (N) เพื่อเลือกจุดหมายใหม่", "info");
+    } else if (userAction && !this.missionGuidanceHidden) {
+      this.missionGuidanceHidden = true;
+      this.hud.toast("ซ่อนเส้นทางภารกิจ", "เลือกภารกิจใหม่ (J) หรือปักหมุด (N) เพื่อนำทางอีกครั้ง", "info");
     }
-    this.guideTarget = undefined;
+    this.navTarget = undefined;
+    this.routeEnd = undefined;
+    this.routeKey = "";
     this.hud.setNavigation(undefined);
+    this.worldMap.refresh();
   }
 
-  private updateNavigation(targetLocal?: { x: number; z: number }): void {
-    if (!this.guideTarget || !targetLocal) {
+  private updateNavigation(targetLocal?: { x: number; z: number }, missionTarget?: NavTarget): void {
+    const target = this.navTarget ?? missionTarget;
+    if (!target || !targetLocal) {
       this.hud.setNavigation(undefined);
       return;
     }
-    const here = localToGeo(this.vehicle.state.position, this.worldAnchor);
-    const distance = distanceMetersBetweenGeo(here, this.guideTarget);
-    const worldDistance = Math.hypot(targetLocal.x - this.vehicle.state.position.x, targetLocal.z - this.vehicle.state.position.z);
-    if (worldDistance < WAYPOINT_RADIUS_METERS) {
-      const arrived = this.guideTarget;
-      this.clearNavigation();
-      this.hud.toast(`ถึงแล้ว: ${placeDisplayName(arrived)}`, "เปิดรีวิวในไกด์", "reward");
+    const vehicleWorld = localToWorldMeters(this.vehicle.state.position, this.worldAnchor);
+    const targetWorld = localToWorldMeters(targetLocal, this.worldAnchor);
+    if (this.navTarget && hasArrived(vehicleWorld, targetWorld, WAYPOINT_RADIUS_METERS, this.routeEnd)) {
+      const arrived = this.navTarget;
+      this.navTarget = undefined;
+      this.routeEnd = undefined;
+      this.hud.setNavigation(undefined);
+      this.hud.toast(`ถึงแล้ว: ${arrived.label}`, arrived.kind === "pin" ? "ถึงจุดที่ปักหมุดไว้" : "เปิดรายละเอียด", "reward");
       this.audio.playCheckpoint();
-      void this.openPlace(arrived.id);
+      if (arrived.placeId) void this.openPlace(arrived.placeId);
+      if (arrived.buildingId) this.selectBuildingById(arrived.buildingId);
+      this.worldMap.refresh();
       return;
     }
-    this.hud.setNavigation(`📍 ${placeDisplayName(this.guideTarget)} · ${formatDistance(distance)}`);
+    const progress = this.routeWorld ? routeProgress(this.routeWorld, vehicleWorld, this.vehicle.state.speed) : undefined;
+    const straight = distanceMetersBetweenGeo(localToGeo(this.vehicle.state.position, this.worldAnchor), target);
+    const icon = this.navTarget ? (target.kind === "building" ? "🏢" : target.kind === "pin" ? "📌" : "📍") : "🎯";
+    if (!progress || progress.maneuver === "arrive" || progress.offRouteMeters > 60) {
+      const remaining = progress && progress.offRouteMeters <= 60 ? progress.remainingMeters : straight;
+      this.hud.setNavigation(`${target.label}`, `${formatDistance(remaining)}${progress ? ` · ${formatEta(progress.etaSeconds)}` : ""}`, progress?.maneuver === "arrive" ? maneuverLabels.arrive.arrow : icon);
+      return;
+    }
+    const label = maneuverLabels[progress.maneuver];
+    this.hud.setNavigation(
+      `${label.th} ใน ${formatDistance(progress.maneuverMeters)}`,
+      `${icon} ${target.label} · ${formatDistance(progress.remainingMeters)} · ${formatEta(progress.etaSeconds)}`,
+      label.arrow,
+    );
   }
 
   private async openPlace(placeId: string): Promise<void> {
     const detail = await this.placesService.getDetail(placeId, "th");
     if (!detail) return;
+    this.clearBuildingSelection();
     const here = localToGeo(this.vehicle.state.position, this.worldAnchor);
     this.detailRequest = placeId;
     this.hud.openDetail(detail, distanceMetersBetweenGeo(here, detail));
@@ -517,6 +612,7 @@ export class GameApp {
     const mission = this.missions.find((candidate) => candidate.id === id);
     if (!mission || !isMissionAvailable(mission, this.save.player.xp, this.save.completedMissionIds)) return;
     this.missionTimer = undefined;
+    this.missionGuidanceHidden = false;
     this.commitSave(startMission(this.save, mission));
     this.hud.closePanels();
     this.hud.toast(`Mission: ${mission.title}`, mission.timeLimit ? `Reach the first stop to start the ${formatRaceTime(mission.timeLimit)} clock` : `${mission.waypoints.length} stops`, "info");
@@ -616,6 +712,7 @@ export class GameApp {
 
     const upcoming = nextMissionAfter(this.missions, mission.id, this.save.player.xp, this.save.completedMissionIds);
     if (upcoming) {
+      this.missionGuidanceHidden = false;
       this.commitSave(startMission(this.save, upcoming));
       this.hud.toast(`Next mission: ${upcoming.title}`, "Open Missions (J) to pick another", "info");
     }
@@ -715,7 +812,7 @@ export class GameApp {
       }
     }
     this.renderer.setTrafficCars(
-      this.traffic.cars.map((car) => ({ id: car.id, yaw: car.yaw, colorIndex: car.colorIndex, braking: car.braking, ...worldMetersToLocal(car, this.worldAnchor) })),
+      this.traffic.cars.map((car) => ({ id: car.id, type: car.type, yaw: car.yaw, colorIndex: car.colorIndex, braking: car.braking, ...worldMetersToLocal(car, this.worldAnchor) })),
     );
   }
 
@@ -735,20 +832,255 @@ export class GameApp {
   }
 
   private respawnOnRoad(): void {
-    const vehicleWorld = localToWorldMeters(this.vehicle.state.position, this.worldAnchor);
-    const nearest = nearestRoadPoint(this.roadSegments, vehicleWorld);
-    if (!nearest || nearest.distance > 3_000) {
+    const distance = this.snapToRoad();
+    if (distance === undefined) {
       this.hud.toast("No road nearby", "Try fast travel to a mission stop", "warning");
       return;
     }
+    this.hud.toast("Back on the road", `${Math.round(distance)} m`, "info");
+  }
+
+  // Puts the car on the closest road, facing along it (whichever way is closer to `preferredYaw`).
+  private snapToRoad(preferredYaw = this.vehicle.state.rotation): number | undefined {
+    const vehicleWorld = localToWorldMeters(this.vehicle.state.position, this.worldAnchor);
+    const nearest = nearestRoadPoint(this.roadSegments, vehicleWorld);
+    if (!nearest || nearest.distance > 3_000) return undefined;
     const { segment } = nearest;
     const forwardYaw = yawForDirection(segment.bx - segment.ax, segment.bz - segment.az);
-    const headingDelta = Math.abs(Math.atan2(Math.sin(forwardYaw - this.vehicle.state.rotation), Math.cos(forwardYaw - this.vehicle.state.rotation)));
+    const headingDelta = Math.abs(Math.atan2(Math.sin(forwardYaw - preferredYaw), Math.cos(forwardYaw - preferredYaw)));
     const yaw = headingDelta > Math.PI / 2 ? forwardYaw + Math.PI : forwardYaw;
     const local = worldMetersToLocal(nearest, this.worldAnchor);
     this.vehicle.teleportLocal(local.x, local.z, yaw, 0);
     this.drift = createDriftState();
-    this.hud.toast("Back on the road", `${Math.round(nearest.distance)} m`, "info");
+    return nearest.distance;
+  }
+
+  // Keeps the car out of building footprints; hitting a wall head-on costs speed like a crash.
+  private collideWithBuildings(time: number): void {
+    const state = this.vehicle.state;
+    const world = localToWorldMeters(state.position, this.worldAnchor);
+    const nearby = this.buildingIndex.nearby(world, CAR_RADIUS + 3);
+    if (!nearby.length) return;
+    const contact = resolveBuildingCollision(world, CAR_RADIUS, nearby.map((entry) => entry.building.footprint));
+    if (!contact) return;
+    const local = worldMetersToLocal(contact, this.worldAnchor);
+    state.position.x = local.x;
+    state.position.z = local.z;
+    const into = -(Math.sin(state.rotation) * contact.normalX + Math.cos(state.rotation) * contact.normalZ) * state.speed;
+    if (into <= 0.5) return;
+    const headOn = into / Math.max(0.01, Math.abs(state.speed));
+    this.vehicle.applyImpact(headOn > 0.75 ? -0.18 : 1 - headOn * 0.85);
+    if (into < 4 || time - this.lastWallHit < 600) return;
+    this.lastWallHit = time;
+    this.renderer.triggerImpact(Math.min(1.2, into / 18));
+    this.audio.playCrash(into);
+    if (!this.save.settings.reduceMotion) vibrate(into > 12 ? 60 : 30);
+    if (this.drift.active) {
+      this.drift = createDriftState();
+      this.hud.toast("Drift lost", "ชนตึก", "danger");
+    } else if (into > 10) {
+      this.hud.toast("ชนตึก!", "ระวังอาคารข้างทาง", "danger");
+    }
+    this.commitSave(addStat(this.save, "crashes", 1));
+  }
+
+  private updatePedestrians(dt: number): void {
+    const world = localToWorldMeters(this.vehicle.state.position, this.worldAnchor);
+    this.pedestrians.update(dt, { x: world.x, z: world.z, speed: this.vehicle.state.speed });
+    this.renderer.setPedestrians(
+      this.pedestrians.people.map((person) => ({ ...worldMetersToLocal(person, this.worldAnchor), yaw: person.yaw, colorIndex: person.colorIndex, phase: person.phase })),
+    );
+  }
+
+  // Street name and district under the speedometer, with a toast when entering a new district.
+  private updateLocation(time: number): void {
+    if (time - this.lastLocationRefresh < 500) return;
+    this.lastLocationRefresh = time;
+    const world = localToWorldMeters(this.vehicle.state.position, this.worldAnchor);
+    const nearest = nearestRoadPoint(this.roadSegments, world);
+    const road = nearest && nearest.distance < 30 ? nearest.segment.name : undefined;
+    const district = districtAt(world);
+    this.hud.setLocation(road, `เขต${district.nameTh}`);
+    if (this.lastDistrictId && district.id !== this.lastDistrictId) {
+      this.hud.toast(`เข้าสู่เขต${district.nameTh}`, district.nameEn, "info");
+    }
+    this.lastDistrictId = district.id;
+  }
+
+  private toggleMap(open: boolean): void {
+    if (open === this.worldMap.isOpen) return;
+    if (open) {
+      this.hud.closePanels();
+      this.hud.closeDrawer();
+      this.worldMap.open();
+      this.audio.setHorn(false);
+    } else {
+      this.worldMap.close();
+      this.renderer.resetFrameTimer();
+    }
+    this.audio.setEnabled(!open && !this.paused && this.save.settings.soundEnabled);
+    document.body.classList.toggle("map-open", open);
+  }
+
+  private createWorldMap(): WorldMap {
+    const procedural = () => this.mapSource === undefined || this.mapSource === "procedural";
+    const toRoad = (piece: { a: WorldMeters; b: WorldMeters; width: number; kind: string }): MapRoad => ({ a: piece.a, b: piece.b, width: piece.width, kind: piece.kind });
+    return new WorldMap(
+      this.hud.root,
+      {
+        vehicle: () => ({ position: localToWorldMeters(this.vehicle.state.position, this.worldAnchor), yaw: this.vehicle.state.rotation }),
+        areas: () => this.mapAreas,
+        majorRoads: (rect) =>
+          procedural()
+            ? majorRoadsInRect(rect).map(toRoad)
+            : this.roadSegments
+                .filter((segment) => segment.kind === "motorway" || segment.kind === "primary" || segment.kind === "secondary" || segment.kind === "bridge")
+                .map((segment) => ({ a: { x: segment.ax, z: segment.az }, b: { x: segment.bx, z: segment.bz }, width: segment.width, kind: segment.kind })),
+        detailTiles: async (rect) => {
+          const { tiles, pending } = await this.mapStreaming.tilesInRect(rect, 4, 90);
+          const roads = roadSegmentsForTiles(tiles).map((segment) => ({ a: { x: segment.ax, z: segment.az }, b: { x: segment.bx, z: segment.bz }, width: segment.width, kind: segment.kind }));
+          const buildings = tiles.flatMap((tile) => tile.buildings ?? []);
+          if (this.mapBuildings.size > 30_000) this.mapBuildings.clear();
+          for (const building of buildings) this.mapBuildings.set(building.id, building);
+          return { roads, buildings, pending };
+        },
+        places: () => this.places,
+        players: () => this.remotePlayers.views(performance.now()).map((view) => ({ position: latLngToWorld(view.lat, view.lng), color: view.color, name: view.name })),
+        route: () => this.routeWorld,
+        target: () => this.currentWaypoint,
+        favorites: () => this.save.navigation.favorites,
+        recent: () => this.save.navigation.recent,
+        roadNameNear: (world) => {
+          if (procedural()) {
+            let best: { name: string; distance: number } | undefined;
+            for (const piece of piecesInRect({ minX: world.x - 150, maxX: world.x + 150, minZ: world.z - 150, maxZ: world.z + 150 })) {
+              const hit = nearestRoadPoint([{ id: piece.id, tileId: "", kind: piece.kind, width: piece.width, ax: piece.a.x, az: piece.a.z, bx: piece.b.x, bz: piece.b.z, length: 1 }], world);
+              if (hit && (!best || hit.distance < best.distance)) best = { name: piece.name, distance: hit.distance };
+            }
+            return best?.name;
+          }
+          return nearestRoadPoint(this.roadSegments, world)?.segment.name;
+        },
+        toWorld: (geo) => latLngToWorld(geo.lat, geo.lng),
+        toGeo: (world) => worldToLatLng(world.x, world.z),
+        insideWorld: (world) => !procedural() || (world.x >= CITY_RECT.minX && world.x <= CITY_RECT.maxX && world.z >= CITY_RECT.minZ && world.z <= CITY_RECT.maxZ),
+        distanceMeters: (geo) => distanceMetersBetweenGeo(localToGeo(this.vehicle.state.position, this.worldAnchor), geo),
+        canFastTravel: () => !(this.race && this.race.closedAt === undefined),
+      },
+      {
+        onNavigate: (target) => {
+          this.setNavTarget(target);
+          this.toggleMap(false);
+        },
+        onFastTravel: (target) => {
+          if (this.race && this.race.closedAt === undefined) {
+            this.hud.toast("ห้ามวาร์ประหว่างแข่ง", "", "warning");
+            return;
+          }
+          this.toggleMap(false);
+          void this.fastTravelTo({ target: { lat: target.lat, lng: target.lng } }).then(() => this.hud.toast(`วาร์ปไป ${target.label}`, "", "info"));
+        },
+        onToggleFavorite: (target) => this.toggleFavoriteTarget(target),
+        onCancelNavigation: () => this.clearNavigation(true),
+        onOpenPlace: (placeId) => {
+          this.toggleMap(false);
+          void this.openPlace(placeId);
+        },
+        onOpenBuilding: (buildingId) => {
+          this.toggleMap(false);
+          this.selectBuildingById(buildingId);
+        },
+        onClose: () => this.toggleMap(false),
+      },
+    );
+  }
+
+  private toggleFavoriteTarget(target: NavTarget): void {
+    const saved = this.save.navigation.favorites.some((item) => item.id === target.id);
+    this.commitSave({ ...this.save, navigation: toggleFavorite(this.save.navigation, target) });
+    this.hud.toast(saved ? "ลบออกจากรายการโปรดแล้ว" : "บันทึกเป็นรายการโปรด ★", target.label, saved ? "info" : "reward");
+    this.worldMap.refresh();
+  }
+
+  // Tap or click a building in the 3D view to open its card (a drag is ignored).
+  private installBuildingPicking(): void {
+    const canvas = this.renderer.renderer.domElement;
+    let press: { x: number; y: number; time: number } | undefined;
+    canvas.addEventListener("pointerdown", (event) => {
+      press = { x: event.clientX, y: event.clientY, time: performance.now() };
+    });
+    canvas.addEventListener("pointerup", (event) => {
+      const start = press;
+      press = undefined;
+      if (!start || this.paused || this.worldMap.isOpen) return;
+      if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 8 || performance.now() - start.time > 450) return;
+      const local = this.renderer.pickBuilding(event.clientX, event.clientY);
+      if (!local) return;
+      const entry = this.buildingIndex.buildingAt(localToWorldMeters(local, this.worldAnchor), 2.5);
+      if (entry) this.showBuilding(entry.building);
+    });
+  }
+
+  // Keyboard alternative to clicking: the closest building ahead of or beside the car.
+  private inspectBuildingAhead(): void {
+    const state = this.vehicle.state;
+    const world = localToWorldMeters(state.position, this.worldAnchor);
+    const fx = Math.sin(state.rotation);
+    const fz = Math.cos(state.rotation);
+    let found: IndexedBuilding | undefined;
+    for (let ahead = 4; ahead <= 52 && !found; ahead += 4) {
+      for (const lateral of [0, -8, 8, -16, 16, -24, 24]) {
+        found = this.buildingIndex.buildingAt({ x: world.x + fx * ahead + fz * lateral, z: world.z + fz * ahead - fx * lateral }, 0);
+        if (found) break;
+      }
+    }
+    found ??= this.buildingIndex
+      .nearby(world, 45)
+      .sort((a, b) => Math.hypot(a.center.x - world.x, a.center.z - world.z) - Math.hypot(b.center.x - world.x, b.center.z - world.z))[0];
+    if (found) this.showBuilding(found.building);
+    else this.hud.toast("ไม่พบอาคารใกล้ ๆ", "ลองขับเข้าใกล้ตึกแล้วกด I อีกครั้ง", "info");
+  }
+
+  private findBuilding(id: string): MapBuilding | undefined {
+    return this.buildingIndex.get(id)?.building ?? this.mapBuildings.get(id);
+  }
+
+  private selectBuildingById(id: string): void {
+    const building = this.findBuilding(id);
+    if (building) this.showBuilding(building);
+  }
+
+  private showBuilding(building: MapBuilding): void {
+    this.selectedBuildingId = building.id;
+    this.renderer.setSelectedBuilding(building);
+    const center = polygonCentroid(building.footprint);
+    const distance = distanceMetersBetweenGeo(localToGeo(this.vehicle.state.position, this.worldAnchor), worldToLatLng(center.x, center.z));
+    const favorite = this.save.navigation.favorites.some((item) => item.id === `building:${building.id}`);
+    this.hud.openBuildingDetail(describeBuilding(building), distance, favorite);
+    this.audio.playUi();
+  }
+
+  private buildingNavTarget(building: MapBuilding): NavTarget {
+    const center = polygonCentroid(building.footprint);
+    const geo = worldToLatLng(center.x, center.z);
+    return { id: `building:${building.id}`, kind: "building", label: building.name ?? describeBuilding(building).title, lat: geo.lat, lng: geo.lng, buildingId: building.id };
+  }
+
+  private buildingAction(action: "navigate" | "favorite", buildingId: string): void {
+    const building = this.findBuilding(buildingId);
+    if (!building) return;
+    const target = this.buildingNavTarget(building);
+    if (action === "navigate") {
+      this.setNavTarget(target);
+      return;
+    }
+    this.toggleFavoriteTarget(target);
+    if (this.selectedBuildingId === building.id) this.showBuilding(building);
+  }
+
+  private clearBuildingSelection(): void {
+    this.selectedBuildingId = undefined;
+    this.renderer.setSelectedBuilding(undefined);
   }
 
   private async maybeOpenNearbyDetail(nearby?: PlaceSummary): Promise<void> {
@@ -824,7 +1156,9 @@ export class GameApp {
     this.renderer.setCameraMode(settings.cameraMode);
     this.audio.setEnabled(settings.soundEnabled && !this.paused);
     const mobile = this.isMobileViewport();
-    this.traffic.setMaxCars(settings.graphicsQuality === "low" ? 8 : mobile ? 10 : 16);
+    const quality = settings.graphicsQuality;
+    this.traffic.setMaxCars(quality === "low" ? (mobile ? 10 : 14) : quality === "medium" ? (mobile ? 16 : 26) : mobile ? 20 : 36);
+    this.pedestrians.setMaxPeople(quality === "low" ? (mobile ? 12 : 24) : quality === "medium" ? (mobile ? 30 : 70) : mobile ? 40 : 120);
     const viewRadius = { low: 700, medium: 1_000, high: 1_400 }[settings.graphicsQuality];
     this.mapStreaming.setViewRadius(mobile ? Math.min(viewRadius, 800) : viewRadius);
   }
@@ -854,10 +1188,13 @@ export class GameApp {
   }
 
   // Road route from the car to the current target over the loaded road graph, refreshed every ~1.2 s.
-  private updateRoute(time: number, target?: PlaceSummary): void {
+  // Pins inside a block end at the closest road point; far targets beyond the loaded roads keep a
+  // straight hint for the last stretch.
+  private updateRoute(time: number, target?: NavTarget): void {
     if (!target || !this.roadGraph) {
       this.routeWorld = undefined;
       this.routeKey = "";
+      this.renderer.setRoute(undefined);
       return;
     }
     const key = `${target.id}|${this.roadTileKey}`;
@@ -865,9 +1202,19 @@ export class GameApp {
     this.routeKey = key;
     this.lastRouteTime = time;
     const from = localToWorldMeters(this.vehicle.state.position, this.worldAnchor);
-    const to = localToWorldMeters(geoToLocal(target, this.worldAnchor), this.worldAnchor);
-    const path = findRoute(this.roadGraph, from, to);
-    this.routeWorld = path ? [from, ...path, to] : undefined;
+    const to = latLngToWorld(target.lat, target.lng);
+    const snapped = nearestRoadPoint(this.roadSegments, to);
+    const roadEnd = snapped && snapped.distance < 180 ? { x: snapped.x, z: snapped.z } : undefined;
+    this.routeEnd = roadEnd;
+    let path = findRoute(this.roadGraph, from, roadEnd ?? to);
+    // The nearest graph node can sit just behind the car; skip it so the route does not start with a U-turn.
+    while (path && path.length >= 2) {
+      const hit = closestPointOnSegment(from, path[0], path[1]);
+      if (hit.t <= 0 || hit.distance > 25) break;
+      path = path.slice(1);
+    }
+    this.routeWorld = path ? [from, ...path, ...(roadEnd ? [roadEnd] : [to])] : undefined;
+    this.renderer.setRoute(this.routeWorld);
   }
 
   private minimapAreaCache?: { key: string; areas: NonNullable<MinimapOverlay["areas"]> };
@@ -1043,7 +1390,7 @@ export class GameApp {
     if (!target) return;
     this.race = createRace(raceId, targetId, hostName, performance.now(), countdownMs);
     this.raceFinished = false;
-    this.guideTarget = undefined;
+    this.navTarget = undefined;
     this.hud.closePanels();
     this.hud.toast(`🏁 ${hostName} ท้าแข่งไป ${placeDisplayName(target)}`, `เริ่มใน ${Math.round(countdownMs / 1000)} วินาที · ห้ามวาร์ป`, "warning");
     this.lastOnlineHud = 0;
@@ -1194,11 +1541,13 @@ export class GameApp {
   }
 
   private async loadMapLayers(): Promise<void> {
-    const [areas, osmPlaces, attribution] = await Promise.all([
+    const [areas, osmPlaces, attribution, source] = await Promise.all([
       this.mapStreaming.loadAreas(),
       this.mapStreaming.loadOsmPlaces(),
       this.mapStreaming.attribution(),
+      this.mapStreaming.source(),
     ]);
+    this.mapSource = source;
     this.renderer.setMapAreas(areas);
     this.mapAreas = areas;
     this.hud.setMapAttribution(attribution);
@@ -1235,6 +1584,8 @@ export class GameApp {
     this.routeKey = "";
     this.collectibles.setTiles(tiles);
     this.traffic.setRoads(this.roadSegments);
+    this.pedestrians.setRoads(this.roadSegments);
+    this.buildingIndex.setTiles(tiles);
     this.lastPickupRefresh = 0;
   }
 
@@ -1253,7 +1604,7 @@ export class GameApp {
     this.missions = createStarterMissions(this.places);
   }
 
-  private updateFastTravelPrompt(waypoint?: PlaceSummary): void {
+  private updateFastTravelPrompt(waypoint?: NavTarget): void {
     if (!waypoint || (this.race && this.race.closedAt === undefined)) {
       this.hud.updateFastTravel(undefined, undefined);
       return;
@@ -1279,9 +1630,12 @@ export class GameApp {
     this.renderer.setWorldOriginOffset(this.worldAnchor);
     this.physics.clearRoadTiles();
     this.traffic.clear();
+    this.pedestrians.clear();
     this.drift = createDriftState();
     this.detailRequest = undefined;
     this.lastPickupRefresh = 0;
     await this.updateStreaming(true);
+    this.snapToRoad(yaw);
+    this.renderer.flushTileBuilds(this.vehicle.state.position, 900);
   }
 }

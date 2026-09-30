@@ -5,6 +5,7 @@ export interface WorldRoadSegment {
   tileId: string;
   kind: RoadSegment["kind"];
   width: number;
+  name?: string;
   ax: number;
   az: number;
   bx: number;
@@ -26,6 +27,7 @@ export function tileRoadSegments(tile: RoadTile): WorldRoadSegment[] {
       tileId: tile.id,
       kind: segment.kind,
       width: segment.width,
+      name: segment.name,
       ax: from.x,
       az: from.z,
       bx: to.x,

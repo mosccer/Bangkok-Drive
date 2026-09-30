@@ -73,6 +73,43 @@ export class MapStreamingService {
     return this.tileStore.loadOsmPlaces();
   }
 
+  async source(): Promise<string | undefined> {
+    return (await this.tileStore.loadManifest()).source;
+  }
+
+  // Tiles covering a map view: cached ones immediately, plus a few newly generated/fetched ones per
+  // call (nearest first). `pending` tells the caller to ask again for the rest.
+  async tilesInRect(
+    rect: { minX: number; maxX: number; minZ: number; maxZ: number },
+    maxNew = 6,
+    maxTiles = 90,
+  ): Promise<{ tiles: RoadTile[]; pending: boolean }> {
+    const manifest = await this.tileStore.loadManifest();
+    const centerX = (rect.minX + rect.maxX) / 2;
+    const centerZ = (rect.minZ + rect.maxZ) / 2;
+    const entries = manifest.tiles.filter(
+      (tile) => tile.boundsMeters.minX <= rect.maxX && tile.boundsMeters.maxX >= rect.minX && tile.boundsMeters.minZ <= rect.maxZ && tile.boundsMeters.maxZ >= rect.minZ,
+    );
+    if (entries.length > maxTiles) return { tiles: [], pending: false };
+    entries.sort((a, b) => tileDistanceToPoint(a, { x: centerX, z: centerZ }) - tileDistanceToPoint(b, { x: centerX, z: centerZ }));
+    const tiles: RoadTile[] = [];
+    let created = 0;
+    let pending = false;
+    for (const entry of entries) {
+      const cached = this.tileStore.peekTile(entry.id);
+      if (cached) {
+        tiles.push(cached);
+      } else if (created < maxNew) {
+        created += 1;
+        const tile = await this.tileStore.loadTile(entry.id);
+        if (tile) tiles.push(tile);
+      } else {
+        pending = true;
+      }
+    }
+    return { tiles, pending };
+  }
+
   async attribution(): Promise<string | undefined> {
     return (await this.tileStore.loadManifest()).attribution;
   }

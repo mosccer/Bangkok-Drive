@@ -1,8 +1,11 @@
 import type { WorldMeters } from "../types";
 import { leftOf, yawForDirection, type WorldRoadSegment } from "./roadGeometry";
 
+export type TrafficVehicleType = "car" | "taxi" | "pickup" | "tuktuk" | "motorbike" | "bus";
+
 export interface TrafficCar {
   id: string;
+  type: TrafficVehicleType;
   laneId: string;
   direction: 1 | -1;
   progress: number;
@@ -35,6 +38,21 @@ export interface TrafficOptions {
 }
 
 export const CAR_COLLISION_DISTANCE = 3.3;
+const collisionDistanceByType: Record<TrafficVehicleType, number> = { car: 3.3, taxi: 3.3, pickup: 3.5, tuktuk: 2.9, motorbike: 2.2, bus: 5.6 };
+const speedFactorByType: Record<TrafficVehicleType, number> = { car: 1, taxi: 1.05, pickup: 0.95, tuktuk: 0.8, motorbike: 1.08, bus: 0.78 };
+const NEAR_LANE_REFRESH_METERS = 60;
+
+// Bangkok mix: taxis everywhere, motorbike taxis weaving along the curb, tuk-tuks, pickups and
+// city buses on the main roads.
+export function pickTrafficType(lane: WorldRoadSegment, roll: number): TrafficVehicleType {
+  const mainRoad = lane.kind === "primary" || lane.kind === "secondary" || lane.kind === "arterial" || lane.kind === "motorway";
+  if (mainRoad && roll < 0.08) return "bus";
+  if (roll < 0.3) return "motorbike";
+  if (roll < 0.4) return "tuktuk";
+  if (roll < 0.62) return "taxi";
+  if (roll < 0.72) return "pickup";
+  return "car";
+}
 const NEAR_MISS_DISTANCE = 6.5;
 const NEAR_MISS_RELEASE_DISTANCE = 9;
 const NEAR_MISS_MIN_SPEED_MPS = 50 / 3.6;
@@ -42,8 +60,8 @@ const TRAFFIC_COLOR_COUNT = 8;
 
 const defaultOptions: TrafficOptions = {
   maxCars: 16,
-  spawnRadius: 380,
-  despawnRadius: 480,
+  spawnRadius: 420,
+  despawnRadius: 520,
   minSpawnDistance: 70,
 };
 
@@ -54,6 +72,8 @@ export class TrafficSystem {
   private carList: TrafficCar[] = [];
   private nextId = 0;
   private spawnTimer = 0;
+  private nearLanes: WorldRoadSegment[] = [];
+  private nearCenter?: WorldMeters;
   private readonly options: TrafficOptions;
 
   constructor(
@@ -83,6 +103,7 @@ export class TrafficSystem {
       }
     }
     this.carList = this.carList.filter((car) => this.lanesById.has(car.laneId));
+    this.nearCenter = undefined;
   }
 
   clear(): void {
@@ -95,7 +116,10 @@ export class TrafficSystem {
     this.spawnTimer -= dt;
     if (this.spawnTimer <= 0 && this.carList.length < this.options.maxCars && this.lanes.length) {
       this.spawnTimer = 0.2;
-      this.trySpawn(player);
+      this.refreshNearLanes(player);
+      // Fill up quickly after loading or a fast travel, then trickle in as cars leave.
+      const burst = this.carList.length < this.options.maxCars * 0.6 ? 3 : 1;
+      for (let i = 0; i < burst && this.carList.length < this.options.maxCars; i += 1) this.trySpawn(player);
     }
 
     for (const car of this.carList) {
@@ -105,18 +129,32 @@ export class TrafficSystem {
     return events;
   }
 
+  // Spawning samples only roads around the player; the loaded map can hold thousands of segments.
+  private refreshNearLanes(player: TrafficPlayer): void {
+    if (this.nearCenter && Math.hypot(player.x - this.nearCenter.x, player.z - this.nearCenter.z) < NEAR_LANE_REFRESH_METERS) return;
+    this.nearCenter = { x: player.x, z: player.z };
+    const reach = this.options.spawnRadius + 60;
+    this.nearLanes = this.lanes.filter((lane) => {
+      const t = Math.max(0, Math.min(1, ((player.x - lane.ax) * (lane.bx - lane.ax) + (player.z - lane.az) * (lane.bz - lane.az)) / (lane.length * lane.length)));
+      return Math.hypot(lane.ax + (lane.bx - lane.ax) * t - player.x, lane.az + (lane.bz - lane.az) * t - player.z) < reach;
+    });
+  }
+
   private trySpawn(player: TrafficPlayer): void {
+    const pool = this.nearLanes.length ? this.nearLanes : this.lanes;
     for (let attempt = 0; attempt < 6; attempt += 1) {
-      const lane = this.lanes[Math.floor(this.random() * this.lanes.length)];
+      const lane = pool[Math.floor(this.random() * pool.length)];
       const progress = this.random() * lane.length;
       const direction: 1 | -1 = this.random() < 0.5 ? 1 : -1;
-      const position = lanePosition(lane, direction, progress);
+      const type = pickTrafficType(lane, this.random());
+      const position = lanePosition(lane, direction, progress, laneBias(type, lane));
       const distance = Math.hypot(position.x - player.x, position.z - player.z);
       if (distance < this.options.minSpawnDistance || distance > this.options.spawnRadius) continue;
       if (this.carList.some((car) => Math.hypot(car.x - position.x, car.z - position.z) < 18)) continue;
-      const cruiseSpeed = cruiseSpeedFor(lane) * (0.85 + this.random() * 0.3);
+      const cruiseSpeed = cruiseSpeedFor(lane) * speedFactorByType[type] * (0.85 + this.random() * 0.3);
       this.carList.push({
         id: `traffic-${this.nextId++}`,
+        type,
         laneId: lane.id + "@" + lane.tileId,
         direction,
         progress,
@@ -164,7 +202,7 @@ export class TrafficSystem {
       }
       car.progress = Math.min(car.progress, current.length);
     }
-    const position = lanePosition(current, car.direction, car.progress);
+    const position = lanePosition(current, car.direction, car.progress, laneBias(car.type, current));
     car.x = position.x;
     car.z = position.z;
     car.yaw = position.yaw;
@@ -182,7 +220,7 @@ export class TrafficSystem {
       const dz = blocker.z - car.z;
       const ahead = dx * fx + dz * fz;
       const lateral = Math.abs(dx * fz - dz * fx);
-      return ahead > 0 && ahead < 11 && lateral < 2.6;
+      return ahead > 0 && ahead < (car.type === "bus" ? 14 : 11) && lateral < 2.6;
     });
   }
 
@@ -198,7 +236,7 @@ export class TrafficSystem {
 
   private checkPlayerContact(car: TrafficCar, player: TrafficPlayer): TrafficEvent[] {
     const distance = Math.hypot(car.x - player.x, car.z - player.z);
-    if (distance < CAR_COLLISION_DISTANCE) {
+    if (distance < collisionDistanceByType[car.type]) {
       car.closeCall = false;
       if (car.crashCooldown > 0) return [];
       car.crashCooldown = 1.5;
@@ -231,13 +269,18 @@ function cruiseSpeedFor(lane: WorldRoadSegment): number {
   return 9;
 }
 
-export function lanePosition(lane: WorldRoadSegment, direction: 1 | -1, progress: number): { x: number; z: number; yaw: number } {
+// Motorbikes ride near the curb; everything else keeps to the middle of its lane.
+function laneBias(type: TrafficVehicleType, lane: WorldRoadSegment): number {
+  return type === "motorbike" ? Math.min(1.4, Math.max(0, lane.width / 2 - Math.max(1.7, lane.width / 4) - 0.9)) : 0;
+}
+
+export function lanePosition(lane: WorldRoadSegment, direction: 1 | -1, progress: number, bias = 0): { x: number; z: number; yaw: number } {
   const startX = direction === 1 ? lane.ax : lane.bx;
   const startZ = direction === 1 ? lane.az : lane.bz;
   const fx = ((direction === 1 ? lane.bx : lane.ax) - startX) / lane.length;
   const fz = ((direction === 1 ? lane.bz : lane.az) - startZ) / lane.length;
   const left = leftOf(fx, fz);
-  const offset = Math.max(1.7, lane.width / 4);
+  const offset = Math.max(1.7, lane.width / 4) + bias;
   const along = Math.max(0, Math.min(lane.length, progress));
   return {
     x: startX + fx * along + left.x * offset,

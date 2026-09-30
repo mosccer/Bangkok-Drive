@@ -18,6 +18,9 @@ export interface UiActions {
   toggleMissions: boolean;
   toggleGuide: boolean;
   toggleOnline: boolean;
+  toggleMap: boolean;
+  cancelNavigation: boolean;
+  inspectBuilding: boolean;
   horn: boolean;
 }
 
@@ -29,6 +32,9 @@ const latchKeys: Record<string, keyof Omit<UiActions, "horn">> = {
   KeyJ: "toggleMissions",
   KeyB: "toggleGuide",
   KeyO: "toggleOnline",
+  KeyN: "toggleMap",
+  KeyX: "cancelNavigation",
+  KeyI: "inspectBuilding",
 };
 
 export class InputController {
@@ -78,6 +84,9 @@ export class InputController {
       toggleMissions: this.uiLatches.has("toggleMissions"),
       toggleGuide: this.uiLatches.has("toggleGuide"),
       toggleOnline: this.uiLatches.has("toggleOnline"),
+      toggleMap: this.uiLatches.has("toggleMap"),
+      cancelNavigation: this.uiLatches.has("cancelNavigation"),
+      inspectBuilding: this.uiLatches.has("inspectBuilding"),
       horn: this.pressed.has("KeyH") || this.touchHorn,
     };
     this.uiLatches.clear();

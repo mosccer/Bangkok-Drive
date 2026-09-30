@@ -45,6 +45,56 @@ const parks: Array<{ id: string; name: string; corners: GeoPoint[] }> = [
     ],
   },
   {
+    id: "fallback-benjakitti-park",
+    name: "Benjakitti Forest Park",
+    corners: [
+      { lat: 13.7345, lng: 100.5548 },
+      { lat: 13.7345, lng: 100.5612 },
+      { lat: 13.7262, lng: 100.5612 },
+      { lat: 13.7262, lng: 100.5548 },
+    ],
+  },
+  {
+    id: "fallback-benjasiri-park",
+    name: "Benjasiri Park",
+    corners: [
+      { lat: 13.7318, lng: 100.5664 },
+      { lat: 13.7318, lng: 100.5698 },
+      { lat: 13.729, lng: 100.5698 },
+      { lat: 13.729, lng: 100.5664 },
+    ],
+  },
+  {
+    id: "fallback-rot-fai-park",
+    name: "Wachirabenchathat (Rot Fai) Park",
+    corners: [
+      { lat: 13.8232, lng: 100.5478 },
+      { lat: 13.8232, lng: 100.556 },
+      { lat: 13.8125, lng: 100.556 },
+      { lat: 13.8125, lng: 100.5478 },
+    ],
+  },
+  {
+    id: "fallback-santichaiprakan-park",
+    name: "Santichaiprakan Park",
+    corners: [
+      { lat: 13.7648, lng: 100.4948 },
+      { lat: 13.7648, lng: 100.4966 },
+      { lat: 13.7634, lng: 100.4966 },
+      { lat: 13.7634, lng: 100.4948 },
+    ],
+  },
+  {
+    id: "fallback-dusit-park",
+    name: "Dusit Park",
+    corners: [
+      { lat: 13.7738, lng: 100.513 },
+      { lat: 13.7738, lng: 100.5185 },
+      { lat: 13.769, lng: 100.5185 },
+      { lat: 13.769, lng: 100.513 },
+    ],
+  },
+  {
     id: "fallback-chatuchak-park",
     name: "Chatuchak Park",
     corners: [

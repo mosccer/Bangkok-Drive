@@ -9,6 +9,7 @@ import type {
   CameraMode,
   GraphicsQuality,
   MapArea,
+  MapBuilding,
   OrientationMode,
   PlaceCategory,
   PlaceSummary,
@@ -20,10 +21,13 @@ import type {
   VehicleVisualState,
   VisualMood,
   WorldAnchor,
+  WorldMeters,
 } from "../types";
 import { BANGKOK_ORIGIN } from "../data/bangkokWorld";
-import { createWorldAnchor, geoToLocal, worldMetersToLocal } from "../data/coordinates";
+import { createWorldAnchor, geoToLocal, MAP_SCALE, worldMetersToLocal } from "../data/coordinates";
 import { getVehicleDefinition } from "../data/vehicles";
+import type { TrafficVehicleType } from "../simulation/traffic";
+import { PEDESTRIAN_COLOR_COUNT } from "../simulation/pedestrians";
 import {
   createAsphaltMaterial,
   createBridgeMaterial,
@@ -35,6 +39,7 @@ import {
   createWaterMaterial,
 } from "./materials/proceduralMaterials";
 import { createVehicleMesh } from "./objects/vehicleMesh";
+import { createTrafficMesh } from "./objects/trafficMeshes";
 import { SkyEnvironment, type MoodPreset } from "./environment/SkyEnvironment";
 import { areaBounds, buildAreaObject, type AreaMaterials } from "./world/areaBuilder";
 import { buildTileGroup, disposeGroup, type WorldMaterials } from "./world/tileBuilder";
@@ -43,15 +48,26 @@ import { getRenderQualityProfile } from "./quality";
 import { AdaptiveResolution } from "./adaptiveResolution";
 
 const GROUND_SIZE = 2600;
+const SIDEWALK_HEIGHT = 0.16;
+
+function normalize2(x: number, z: number): { x: number; z: number } {
+  const length = Math.hypot(x, z) || 1;
+  return { x: x / length, z: z / length };
+}
 const GROUND_REPEAT = 60;
 const AREA_BUILD_RADIUS = 5_000;
-const trafficPalette = ["#ec4899", "#a3e635", "#facc15", "#f97316", "#3b82f6", "#e2e8f0", "#ef4444", "#14b8a6"];
-const trafficClasses: VehicleDefinition["class"][] = ["taxi", "taxi", "taxi", "compact", "pickup", "ev", "compact", "pickup"];
-
-function trafficDefinition(colorIndex: number): VehicleDefinition {
-  const index = Math.abs(colorIndex) % trafficPalette.length;
-  return { ...getVehicleDefinition("siam-taxi"), id: `traffic-${index}`, class: trafficClasses[index], color: trafficPalette[index] };
-}
+const trafficPalettes: Record<TrafficVehicleType, string[]> = {
+  car: ["#e2e8f0", "#94a3b8", "#1f2937", "#b91c1c", "#1d4ed8", "#f8fafc"],
+  taxi: ["#ec4899", "#a3e635", "#f97316", "#3b82f6", "#facc15"],
+  pickup: ["#f8fafc", "#475569", "#1f2937", "#78716c"],
+  tuktuk: ["#2563eb", "#16a34a", "#dc2626", "#0f766e"],
+  motorbike: ["#111827", "#dc2626", "#2563eb", "#f8fafc"],
+  bus: ["#dc2626", "#2563eb", "#f97316", "#f5f5f4"],
+};
+const shirtColors = ["#ef4444", "#f97316", "#facc15", "#22c55e", "#0ea5e9", "#6366f1", "#ec4899", "#f8fafc", "#1f2937", "#a16207"].slice(0, PEDESTRIAN_COLOR_COUNT);
+const MAX_PEDESTRIANS = 180;
+const ROUTE_Y = 0.15;
+const ROUTE_HALF_WIDTH = 1.7;
 
 function disposeObject(object: THREE.Object3D): void {
   object.traverse((child) => {
@@ -60,10 +76,17 @@ function disposeObject(object: THREE.Object3D): void {
       child.material.dispose();
       return;
     }
+    if (child instanceof THREE.Line) {
+      child.geometry.dispose();
+      (child.material as THREE.Material).dispose();
+      return;
+    }
     if (!(child instanceof THREE.Mesh)) return;
     if (!child.geometry.userData.shared) child.geometry.dispose();
     const materials = Array.isArray(child.material) ? child.material : [child.material];
-    for (const material of materials) material.dispose();
+    for (const material of materials) {
+      if (!material.userData.shared) material.dispose();
+    }
   });
 }
 
@@ -101,6 +124,34 @@ function createLabelSprite(text: string, background: string, border: string, fon
   sprite.scale.set((worldHeight * canvas.width) / canvas.height, worldHeight, 1);
   sprite.renderOrder = 10;
   return sprite;
+}
+
+// Cyan band with forward-pointing chevrons for the 3D route line; scrolls along the route.
+function createRouteTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 64;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    ctx.fillStyle = "rgba(34, 211, 238, 0.3)";
+    ctx.fillRect(0, 0, 64, 128);
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.95)";
+    ctx.lineWidth = 9;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const top of [22, 86]) {
+      ctx.beginPath();
+      ctx.moveTo(12, top + 26);
+      ctx.lineTo(32, top);
+      ctx.lineTo(52, top + 26);
+      ctx.stroke();
+    }
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  return texture;
 }
 
 function markerColor(category: PlaceCategory): string {
@@ -162,6 +213,18 @@ export class WorldRenderer {
   private readonly vehiclePosition = new THREE.Vector3();
   private readonly adaptiveResolution = new AdaptiveResolution();
   private lastRenderTime = 0;
+  private readonly pendingTiles = new Map<string, RoadTile>();
+  private readonly raycaster = new THREE.Raycaster();
+  private readonly selectionGroup = new THREE.Group();
+  private selectedBuilding?: MapBuilding;
+  private readonly routeTexture = createRouteTexture();
+  private readonly routeMaterial = new THREE.MeshBasicMaterial({ map: this.routeTexture, transparent: true, depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2 });
+  private routeMesh?: THREE.Mesh;
+  private routeWorld?: WorldMeters[];
+  private routeKey = "";
+  private readonly pedestrianBodies: THREE.InstancedMesh;
+  private readonly pedestrianLegs: THREE.InstancedMesh;
+  private readonly pedestrianHeads: THREE.InstancedMesh;
 
   constructor(private readonly canvasHost: HTMLElement) {
     this.qualityProfile = getRenderQualityProfile("medium", this.isMobileViewport());
@@ -190,6 +253,8 @@ export class WorldRenderer {
       markings: createMarkingMaterial(),
       walls: this.facade.walls,
       roofs: this.facade.roofs,
+      signs: new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }),
+      props: new THREE.MeshStandardMaterial({ color: "#cbd5e1", roughness: 0.55, metalness: 0.35 }),
       treeTrunk,
       treeLeaves,
       lampPole: new THREE.MeshStandardMaterial({ color: "#4b5563", roughness: 0.5, metalness: 0.6 }),
@@ -202,6 +267,18 @@ export class WorldRenderer {
       treeTrunk,
       treeLeaves,
     };
+
+    const shirt = new THREE.MeshStandardMaterial({ color: "#ffffff", roughness: 0.8 });
+    this.pedestrianBodies = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.24, 0.3, 0.9, 8).translate(0, 1.2, 0), shirt, MAX_PEDESTRIANS);
+    this.pedestrianLegs = new THREE.InstancedMesh(new THREE.BoxGeometry(0.4, 0.78, 0.24).translate(0, 0.39, 0), new THREE.MeshStandardMaterial({ color: "#1e293b", roughness: 0.85 }), MAX_PEDESTRIANS);
+    this.pedestrianHeads = new THREE.InstancedMesh(new THREE.SphereGeometry(0.19, 10, 8).translate(0, 1.84, 0), new THREE.MeshStandardMaterial({ color: "#c58c5c", roughness: 0.7 }), MAX_PEDESTRIANS);
+    for (const mesh of [this.pedestrianBodies, this.pedestrianLegs, this.pedestrianHeads]) {
+      mesh.count = 0;
+      mesh.frustumCulled = false;
+      mesh.castShadow = false;
+      this.scene.add(mesh);
+    }
+    shirtColors.forEach((color, index) => this.pedestrianBodies.setColorAt(index, new THREE.Color(color)));
 
     this.environment = new SkyEnvironment(this.scene);
     this.moodPreset = this.environment.currentPreset;
@@ -307,7 +384,7 @@ export class WorldRenderer {
     }
   }
 
-  setTrafficCars(cars: Array<{ id: string; x: number; z: number; yaw: number; colorIndex: number; braking: boolean }>): void {
+  setTrafficCars(cars: Array<{ id: string; type: TrafficVehicleType; x: number; z: number; yaw: number; colorIndex: number; braking: boolean }>): void {
     const active = new Set(cars.map((car) => car.id));
     for (const [id, group] of this.trafficMeshes) {
       if (!active.has(id)) {
@@ -319,7 +396,8 @@ export class WorldRenderer {
     for (const car of cars) {
       let group = this.trafficMeshes.get(car.id);
       if (!group) {
-        group = createVehicleMesh(trafficDefinition(car.colorIndex));
+        const palette = trafficPalettes[car.type];
+        group = createTrafficMesh(car.type, palette[Math.abs(car.colorIndex) % palette.length]);
         this.trafficMeshes.set(car.id, group);
         this.scene.add(group);
       }
@@ -408,8 +486,13 @@ export class WorldRenderer {
     this.clearSkidMarks();
     this.waypointKey = "";
     this.cameraInitialized = false;
+    this.setSelectedBuilding(this.selectedBuilding);
+    const route = this.routeWorld;
+    this.routeKey = "";
+    this.setRoute(route);
   }
 
+  // Tile meshes are built a few per frame, nearest first, so streaming never stalls a frame.
   setVisibleRoadTiles(tiles: RoadTile[]): void {
     const active = new Set(tiles.map((tile) => tile.id));
     for (const [id, entry] of this.roadTileGroups) {
@@ -419,15 +502,172 @@ export class WorldRenderer {
         this.roadTileGroups.delete(id);
       }
     }
-
-    for (const tile of tiles) {
-      if (this.roadTileGroups.has(tile.id)) continue;
-      const group = buildTileGroup(tile, { materials: this.worldMaterials, quality: this.qualityProfile, blockers: this.mapAreas });
-      const local = worldMetersToLocal(tile.originMeters, this.worldAnchor);
-      group.position.set(local.x, 0, local.z);
-      this.roadTileGroups.set(tile.id, { group, tile });
-      this.scene.add(group);
+    for (const id of [...this.pendingTiles.keys()]) {
+      if (!active.has(id)) this.pendingTiles.delete(id);
     }
+    for (const tile of tiles) {
+      if (!this.roadTileGroups.has(tile.id)) this.pendingTiles.set(tile.id, tile);
+    }
+  }
+
+  // Builds every queued tile now (after a teleport, so the player never lands in an empty world).
+  flushTileBuilds(center: { x: number; z: number }, radius = Number.POSITIVE_INFINITY): void {
+    this.vehiclePosition.set(center.x, 0, center.z);
+    for (const tile of this.orderedPendingTiles()) {
+      const local = worldMetersToLocal(tile.originMeters, this.worldAnchor);
+      if (Math.hypot(local.x - center.x, local.z - center.z) > radius) continue;
+      this.buildTile(tile);
+    }
+  }
+
+  get pendingTileCount(): number {
+    return this.pendingTiles.size;
+  }
+
+  private orderedPendingTiles(): RoadTile[] {
+    const distance = (tile: RoadTile) => {
+      const local = worldMetersToLocal(tile.originMeters, this.worldAnchor);
+      return Math.hypot(local.x - this.vehiclePosition.x, local.z - this.vehiclePosition.z);
+    };
+    return [...this.pendingTiles.values()].sort((a, b) => distance(a) - distance(b));
+  }
+
+  private buildPendingTiles(): void {
+    if (!this.pendingTiles.size) return;
+    const start = performance.now();
+    const budget = this.isMobileViewport() ? 5 : 9;
+    for (const tile of this.orderedPendingTiles()) {
+      this.buildTile(tile);
+      if (performance.now() - start > budget) break;
+    }
+  }
+
+  private buildTile(tile: RoadTile): void {
+    this.pendingTiles.delete(tile.id);
+    if (this.roadTileGroups.has(tile.id)) return;
+    const group = buildTileGroup(tile, { materials: this.worldMaterials, quality: this.qualityProfile });
+    const local = worldMetersToLocal(tile.originMeters, this.worldAnchor);
+    group.position.set(local.x, 0, local.z);
+    this.roadTileGroups.set(tile.id, { group, tile });
+    this.scene.add(group);
+  }
+
+  // Ray from the camera through a screen point; returns the local ground position of the building hit.
+  pickBuilding(clientX: number, clientY: number): { x: number; z: number } | undefined {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (!rect.width || !rect.height) return undefined;
+    const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    this.raycaster.far = 1_400;
+    const targets: THREE.Object3D[] = [];
+    for (const { group } of this.roadTileGroups.values()) {
+      for (const child of group.children) {
+        if (child.userData.pickable === "building") targets.push(child);
+      }
+    }
+    const hit = this.raycaster.intersectObjects(targets, false)[0];
+    if (!hit) return undefined;
+    // Step slightly into the wall so the point lands inside the footprint.
+    const inward = this.raycaster.ray.direction.clone().multiplyScalar(0.4);
+    return { x: hit.point.x + inward.x, z: hit.point.z + inward.z };
+  }
+
+  // Glowing outline and floating name over the building shown in the info card.
+  setSelectedBuilding(building?: MapBuilding): void {
+    this.selectedBuilding = building;
+    for (const child of [...this.selectionGroup.children]) {
+      this.selectionGroup.remove(child);
+      disposeObject(child);
+    }
+    if (!building || building.footprint.length < 3) return;
+    const local = building.footprint.map((point) => worldMetersToLocal(point, this.worldAnchor));
+    const shape = new THREE.Shape(local.map((point) => new THREE.Vector2(point.x, -point.z)));
+    const height = Math.max(4, building.heightMeters * MAP_SCALE) + 1.2;
+    const geometry = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
+    geometry.rotateX(-Math.PI / 2);
+    const shell = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: "#22d3ee", transparent: true, opacity: 0.16, depthWrite: false, toneMapped: false }));
+    shell.scale.set(1.02, 1, 1.02);
+    const center = local.reduce((sum, point) => ({ x: sum.x + point.x / local.length, z: sum.z + point.z / local.length }), { x: 0, z: 0 });
+    shell.position.set(center.x * -0.02, 0, center.z * -0.02);
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), new THREE.LineBasicMaterial({ color: "#67e8f9", toneMapped: false }));
+    const label = createLabelSprite(building.name ?? "อาคาร", "#0b1220", "#67e8f9", 44);
+    label.scale.multiplyScalar(4.5);
+    label.position.set(center.x, height + 7, center.z);
+    this.selectionGroup.add(shell, edges, label);
+  }
+
+  // Route drawn on the road surface as a scrolling chevron ribbon (world coordinates).
+  setRoute(points?: WorldMeters[]): void {
+    const key = points ? `${points.length}|${points.map((point) => `${Math.round(point.x)}:${Math.round(point.z)}`).join(",")}|${this.worldAnchor.version}` : "";
+    if (key === this.routeKey) return;
+    this.routeKey = key;
+    this.routeWorld = points;
+    if (this.routeMesh) {
+      this.scene.remove(this.routeMesh);
+      this.routeMesh.geometry.dispose();
+      this.routeMesh = undefined;
+    }
+    if (!points || points.length < 2) return;
+    const local = points.map((point) => worldMetersToLocal(point, this.worldAnchor)).filter((point, index, list) => index === 0 || Math.hypot(point.x - list[index - 1].x, point.z - list[index - 1].z) > 0.5);
+    if (local.length < 2) return;
+    const positions: number[] = [];
+    const uvs: number[] = [];
+    const indices: number[] = [];
+    let distance = 0;
+    for (let i = 0; i < local.length; i += 1) {
+      const prev = local[Math.max(0, i - 1)];
+      const next = local[Math.min(local.length - 1, i + 1)];
+      if (i > 0) distance += Math.hypot(local[i].x - prev.x, local[i].z - prev.z);
+      const inDir = i > 0 ? normalize2(local[i].x - prev.x, local[i].z - prev.z) : normalize2(next.x - local[i].x, next.z - local[i].z);
+      const outDir = i < local.length - 1 ? normalize2(next.x - local[i].x, next.z - local[i].z) : inDir;
+      const tangent = normalize2(inDir.x + outDir.x, inDir.z + outDir.z);
+      const miter = Math.min(2, 1 / Math.max(0.35, tangent.x * outDir.x + tangent.z * outDir.z));
+      const nx = -tangent.z * ROUTE_HALF_WIDTH * miter;
+      const nz = tangent.x * ROUTE_HALF_WIDTH * miter;
+      positions.push(local[i].x + nx, ROUTE_Y, local[i].z + nz, local[i].x - nx, ROUTE_Y, local[i].z - nz);
+      uvs.push(0, distance / 6, 1, distance / 6);
+      if (i > 0) {
+        const base = (i - 1) * 2;
+        indices.push(base, base + 1, base + 2, base + 1, base + 3, base + 2);
+      }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setIndex(indices);
+    geometry.computeBoundingSphere();
+    this.routeMaterial.side = THREE.DoubleSide;
+    this.routeMesh = new THREE.Mesh(geometry, this.routeMaterial);
+    this.routeMesh.renderOrder = 2;
+    this.scene.add(this.routeMesh);
+  }
+
+  setPedestrians(people: Array<{ x: number; z: number; yaw: number; colorIndex: number; phase: number }>): void {
+    const count = Math.min(MAX_PEDESTRIANS, people.length);
+    const matrix = new THREE.Matrix4();
+    const rotation = new THREE.Quaternion();
+    const up = new THREE.Vector3(0, 1, 0);
+    const scale = new THREE.Vector3(1, 1, 1);
+    const position = new THREE.Vector3();
+    const color = new THREE.Color();
+    for (let i = 0; i < count; i += 1) {
+      const person = people[i];
+      rotation.setFromAxisAngle(up, person.yaw);
+      position.set(person.x, SIDEWALK_HEIGHT + Math.abs(Math.sin(person.phase)) * 0.06, person.z);
+      matrix.compose(position, rotation, scale);
+      this.pedestrianBodies.setMatrixAt(i, matrix);
+      this.pedestrianHeads.setMatrixAt(i, matrix);
+      scale.set(1, 1 - Math.abs(Math.sin(person.phase)) * 0.08, 1);
+      matrix.compose(position, rotation, scale);
+      this.pedestrianLegs.setMatrixAt(i, matrix);
+      scale.set(1, 1, 1);
+      this.pedestrianBodies.setColorAt(i, color.set(shirtColors[person.colorIndex % shirtColors.length]));
+    }
+    for (const mesh of [this.pedestrianBodies, this.pedestrianLegs, this.pedestrianHeads]) {
+      mesh.count = count;
+      mesh.instanceMatrix.needsUpdate = true;
+    }
+    if (this.pedestrianBodies.instanceColor) this.pedestrianBodies.instanceColor.needsUpdate = true;
   }
 
   setMapAreas(areas: MapArea[]): void {
@@ -436,8 +676,6 @@ export class WorldRenderer {
     this.areasKey = key;
     this.mapAreas = areas;
     this.clearAreas();
-    // Procedural frontage avoids water and parks, so tiles built before the areas arrived are rebuilt.
-    this.clearRoadTileGroups();
   }
 
   updateAreas(vehicleLocal: { x: number; z: number }): void {
@@ -461,7 +699,7 @@ export class WorldRenderer {
     }
   }
 
-  setActiveWaypoint(place?: PlaceSummary): void {
+  setActiveWaypoint(place?: { id: string; lat: number; lng: number }): void {
     const key = place ? `${place.id}:${this.worldAnchor.version}:${this.worldAnchor.worldMeters.x}` : "";
     if (key === this.waypointKey) return;
     this.waypointKey = key;
@@ -602,6 +840,10 @@ export class WorldRenderer {
       const pulse = 1 + Math.sin(t * 3) * 0.06;
       this.waypointRing.scale.set(pulse, pulse, 1);
     }
+    if (this.routeMesh && !this.arcadeVisualSettings.reduceMotion) {
+      this.routeTexture.offset.y = -((t * 0.9) % 1);
+    }
+    this.buildPendingTiles();
     const now = performance.now();
     if (this.lastRenderTime) {
       const scale = this.adaptiveResolution.update(now - this.lastRenderTime);
@@ -744,6 +986,7 @@ export class WorldRenderer {
     this.areaGroup.position.set(-this.worldAnchor.worldMeters.x, 0, -this.worldAnchor.worldMeters.z);
     this.scene.add(this.areaGroup);
     this.scene.add(this.waypointGroup);
+    this.scene.add(this.selectionGroup);
     this.scene.add(this.vehicle);
   }
 

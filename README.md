@@ -23,8 +23,10 @@ Open `http://localhost:5173`.
 - `R`: back to the nearest road
 - `H`: horn
 - `G`: garage · `J`: missions · `B`: Bangkok guide · `O`: online
+- `N`: full-screen map (tap anywhere to drop a pin and navigate, warp, or save it) · `X`: cancel the route
+- `I` or click/tap a building: building card (type, floors, height, address, tenants) with navigate and save
 - `P` / `Esc`: pause menu
-- Mobile: left virtual stick, right pedals (N₂O, GO, BRK, DRIFT), CAM and HORN buttons
+- Mobile: left virtual stick, right pedals (N₂O, GO, BRK, DRIFT), CAM and HORN buttons; 🗺 opens the map
 
 URL options: `?start=13.7405,100.4995` spawns at a location, `?room=friends` joins a multiplayer room.
 
@@ -33,6 +35,19 @@ URL options: `?start=13.7405,100.4995` spawns at a location, `?room=friends` joi
 - Vite + TypeScript + Three.js, Rapier physics world
 - Streaming 1:1-style Bangkok map (2x map scale) with a floating origin; roads, buildings, water and parks
   can be imported from OpenStreetMap
+- Without an OSM import the whole of inner Bangkok (~28 × 22 km, lat 13.665–13.86, lng 100.405–100.665) is
+  generated on demand: ~45 hand-traced main roads and river bridges (`src/data/bangkokArteries.ts`) plus a
+  jittered superblock grid with sois, cut by the Chao Phraya and parks (`src/data/proceduralCity.ts`)
+- Every street is lined and every block filled with buildings (`src/data/cityBuildings.ts`): shophouses with
+  awnings and signs, townhouses, houses with pitched roofs, condo and office towers with podiums and crowns,
+  hotels, malls, temples with tiered roofs, schools, hospitals, markets, warehouses; each has a name, floors,
+  address, year built and tenants. Cars collide with buildings
+- Full-screen map: pan, pinch/wheel zoom, street and building detail when zoomed in, place search, tap to
+  pin any spot, navigate / warp / favorite, favorites and recent destinations saved with the game
+- Turn-by-turn navigation: road route drawn on the street as a scrolling chevron ribbon, next turn, distance
+  and ETA in the nav chip; cancel any time (`X` or ×); current street and district shown above the speedometer
+- More AI: up to 36 traffic vehicles (taxis, tuk-tuks, motorbike taxis, pickups, city buses) and up to 120
+  pedestrians walking the sidewalks, scaled by graphics quality
 - Graphics: gradient sky with sun and stars, day / golden hour / neon night lighting, sun shadows that
   follow the car, bloom on High, reflections, merged road meshes with sidewalks, lane markings and zebra
   crossings, shophouse rows and towers, instanced street trees and lamps, animated Chao Phraya river
@@ -55,7 +70,7 @@ URL options: `?start=13.7405,100.4995` spawns at a location, `?room=friends` joi
 - Installable PWA (`manifest.webmanifest`, icons): add to the home screen for fullscreen landscape play
 - First launch on low-end phones starts on Low quality; dynamic resolution lowers the render scale when
   frames get slow and restores it when they recover; shadows are off on mobile Medium
-- Rapier physics (~1.4 MB WASM) and supabase-js load lazily, so the first download is ~225 KB gzipped JS
+- Rapier physics (~1.4 MB WASM) and supabase-js load lazily, so the first download is ~260 KB gzipped JS
 - Analog steering stick with pointer capture, multi-touch pedals, drift/camera/horn buttons, haptics
 - Compact icon menu, bottom-sheet panels in portrait and side sheets in landscape, minimap drawn at half
   rate on phones
@@ -153,7 +168,7 @@ npm run osm:import
 `scripts/import-osm.ts` fetches roads, building footprints, water/park polygons and POIs (every mapped
 Buddhist temple, cafés, attractions, museums, markets, malls) from the Overpass API and writes streaming
 tiles to `public/data/road-tiles/`, polygons to `public/data/road-tiles/areas.json` and places to
-`public/data/osm-places.json`. See `scripts/README.md` for options. Without generated files the game uses
-bundled fallback tiles with an approximate river and parks.
+`public/data/osm-places.json`. See `scripts/README.md` for options. Without generated files the game streams
+the procedural city with an approximate river and parks.
 
 Map data © OpenStreetMap contributors (ODbL).

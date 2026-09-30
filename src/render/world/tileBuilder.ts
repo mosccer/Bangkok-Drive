@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { MAP_SCALE } from "../../data/coordinates";
 import { hashString } from "../../simulation/hash";
-import type { MapArea, MapBuildingKind, RenderQualityProfile, RoadSegment, RoadTile, WorldMeters } from "../../types";
+import type { BuildingUse, MapBuilding, MapBuildingKind, RenderQualityProfile, RoadSegment, RoadTile, WorldMeters } from "../../types";
 import { GeometryBuffer, UP, type Vec3 } from "./GeometryBuffer";
 
 export interface WorldMaterials {
@@ -11,6 +11,8 @@ export interface WorldMaterials {
   markings: THREE.Material;
   walls: THREE.Material;
   roofs: THREE.Material;
+  signs: THREE.Material;
+  props: THREE.Material;
   treeTrunk: THREE.Material;
   treeLeaves: THREE.Material;
   lampPole: THREE.Material;
@@ -20,7 +22,6 @@ export interface WorldMaterials {
 export interface TileBuildContext {
   materials: WorldMaterials;
   quality: RenderQualityProfile;
-  blockers: MapArea[];
 }
 
 interface LocalSegment {
@@ -35,11 +36,13 @@ interface LocalSegment {
   half: number;
 }
 
-interface Footprint {
-  points: WorldMeters[];
-  height: number;
-  kind: MapBuildingKind;
-  seed: number;
+interface BuildingBuffers {
+  walls: GeometryBuffer;
+  roofs: GeometryBuffer;
+  signs: GeometryBuffer;
+  tanks: THREE.Matrix4[];
+  boxes: THREE.Matrix4[];
+  antennas: THREE.Matrix4[];
 }
 
 const ROAD_Y = 0.06;
@@ -51,26 +54,52 @@ const ROAD_UV_SCALE = 1 / 12;
 const FACADE_U = 1 / 28;
 const FACADE_V = 1 / 25.6;
 
-const wallPalettes: Record<MapBuildingKind | "shophouse" | "tower", string[]> = {
+type PaletteKey = MapBuildingKind | BuildingUse;
+
+const wallPalettes: Record<PaletteKey, string[]> = {
   shophouse: ["#eadfc8", "#dcc6a6", "#cdd9e1", "#e9cdbb", "#d4dbc6", "#f2e8d5", "#c3ccd3", "#e6bba8", "#f0d9a8"],
-  tower: ["#a8bccd", "#bcc7cf", "#8a9eb1", "#cbd6de", "#98aebd", "#d8dde2"],
+  townhouse: ["#efe4cf", "#e2d2b8", "#d9e1e4", "#f1e0d0", "#dfe6d8", "#e8d7c4"],
+  house: ["#f4ead8", "#e8dcc6", "#dbe4e0", "#f2e2cf", "#e0e8d4", "#f6efe2"],
+  condo: ["#e8e2d6", "#d9dee3", "#cfd8dc", "#f1ece4", "#c9d3db", "#e3d5c3"],
+  office: ["#a8bccd", "#bcc7cf", "#8a9eb1", "#cbd6de", "#98aebd", "#d8dde2", "#9fb6c9"],
+  hotel: ["#e9dcc4", "#d8c8b0", "#c8d2d8", "#ede3d3", "#d6c2a8"],
+  mall: ["#e5e7eb", "#d1d5db", "#f3f4f6", "#e7e2d8"],
+  temple: ["#f7f1e3"],
+  school: ["#f2d8a7", "#e9c996", "#f5e6c8"],
+  hospital: ["#f4f6f8", "#e8eef2", "#eef2f0"],
+  market: ["#d6cfc2", "#c8c0b0", "#ddd3c1"],
+  warehouse: ["#a9adb2", "#b8b3a8", "#9ca3af"],
+  government: ["#e8d8b8", "#dccdb0", "#efe7d6"],
+  convenience: ["#f8fafc", "#f1f5f9"],
   commercial: ["#b7c6d3", "#d4dbe1", "#9fb3c4", "#e2e5e8"],
   residential: ["#efe4cf", "#e2d2b8", "#d9e1e4", "#f1e0d0", "#dfe6d8"],
-  temple: ["#f7f1e3"],
   civic: ["#e8d8b8", "#dccdb0", "#efe7d6"],
   industrial: ["#a9adb2", "#b8b3a8"],
   generic: ["#dcd3c3", "#cfd5da", "#e6dccb", "#c9c4bb", "#d8cbb8"],
 };
-const roofPalettes: Record<MapBuildingKind | "shophouse" | "tower", string[]> = {
+const roofPalettes: Record<PaletteKey, string[]> = {
   shophouse: ["#7b6f63", "#8a5a44", "#6b7280", "#9a3412"],
-  tower: ["#4b5563", "#596270", "#3f4652"],
+  townhouse: ["#8b5e3c", "#7c2d12", "#6b7280"],
+  house: ["#9a3412", "#7c2d12", "#b45309", "#8b5e3c", "#475569"],
+  condo: ["#6b7280", "#596270", "#78716c"],
+  office: ["#4b5563", "#596270", "#3f4652"],
+  hotel: ["#57534e", "#64748b"],
+  mall: ["#525a66", "#646c78"],
+  temple: ["#c2410c", "#b45309", "#ea580c"],
+  school: ["#9a3412", "#b45309"],
+  hospital: ["#94a3b8", "#cbd5e1"],
+  market: ["#64748b", "#78716c"],
+  warehouse: ["#7c8087", "#64748b", "#94a3b8"],
+  government: ["#7c4a2d", "#6b7280"],
+  convenience: ["#475569"],
   commercial: ["#525a66", "#646c78"],
   residential: ["#9a3412", "#7c2d12", "#6b7280", "#8b5e3c"],
-  temple: ["#c2410c", "#b45309", "#15803d"],
   civic: ["#7c4a2d", "#6b7280"],
   industrial: ["#7c8087"],
   generic: ["#6b7280", "#5b616b", "#7b6f63"],
 };
+const awningColors = ["#dc2626", "#2563eb", "#16a34a", "#f59e0b", "#7c3aed", "#0891b2", "#e11d48", "#ea580c", "#0f766e"].map((color) => new THREE.Color(color));
+const signColors = ["#facc15", "#f472b6", "#38bdf8", "#4ade80", "#fb923c", "#f87171", "#ffffff", "#a78bfa"].map((color) => new THREE.Color(color));
 
 function pick<T>(list: T[], seed: number): T {
   return list[seed % list.length];
@@ -160,32 +189,39 @@ export function buildTileGroup(tile: RoadTile, context: TileBuildContext): THREE
     }
   }
 
-  const addMesh = (buffer: GeometryBuffer, material: THREE.Material, receive: boolean, cast: boolean) => {
-    if (buffer.isEmpty) return;
+  const addMesh = (buffer: GeometryBuffer, material: THREE.Material, receive: boolean, cast: boolean): THREE.Mesh | undefined => {
+    if (buffer.isEmpty) return undefined;
     const mesh = new THREE.Mesh(buffer.toGeometry(), material);
     mesh.receiveShadow = receive;
     mesh.castShadow = cast;
     group.add(mesh);
+    return mesh;
   };
   addMesh(asphalt, context.materials.asphalt, true, false);
   addMesh(bridges, context.materials.bridge, true, true);
   addMesh(sidewalks, context.materials.sidewalk, true, false);
   addMesh(markings, context.materials.markings, true, false);
 
-  const localBlockers = context.blockers.map((area) => ({ ...area, outer: area.outer.map((point) => ({ x: point.x - origin.x, z: point.z - origin.z })) }));
-  const footprints = tile.buildings?.length
-    ? tile.buildings.map((building) => ({
-        points: building.footprint.map((point) => ({ x: point.x - origin.x, z: point.z - origin.z })),
-        height: building.heightMeters * MAP_SCALE,
-        kind: building.kind,
-        seed: hashString(building.id),
-      }))
-    : proceduralFootprints(tile.id, segments, junctionTrim, localBlockers, detail);
-  const walls = new GeometryBuffer(true);
-  const roofs = new GeometryBuffer(true);
-  for (const footprint of footprints) extrudeFootprint(walls, roofs, footprint, !tile.buildings?.length);
-  addMesh(walls, context.materials.walls, true, detail !== "low");
-  addMesh(roofs, context.materials.roofs, true, false);
+  const buildings: BuildingBuffers = {
+    walls: new GeometryBuffer(true),
+    roofs: new GeometryBuffer(true),
+    signs: new GeometryBuffer(true),
+    tanks: [],
+    boxes: [],
+    antennas: [],
+  };
+  for (const building of tile.buildings ?? []) addBuilding(buildings, building, origin, detail);
+  const wallMesh = addMesh(buildings.walls, context.materials.walls, true, detail !== "low");
+  const roofMesh = addMesh(buildings.roofs, context.materials.roofs, true, detail === "high");
+  addMesh(buildings.signs, context.materials.signs, false, false);
+  for (const mesh of [wallMesh, roofMesh]) {
+    if (mesh) mesh.userData.pickable = "building";
+  }
+  if (detail !== "low") {
+    addInstances(group, rooftopTankGeometry, context.materials.props, buildings.tanks);
+    addInstances(group, rooftopBoxGeometry, context.materials.props, buildings.boxes);
+    addInstances(group, antennaGeometry, context.materials.lampPole, buildings.antennas);
+  }
 
   if (detail !== "low") {
     addStreetFurniture(group, segments, junctionTrim, context, detail === "high" ? 15 : 22);
@@ -279,80 +315,21 @@ function addDisc(buffer: GeometryBuffer, center: WorldMeters, radius: number, y:
   }
 }
 
-function pointInPolygon(point: WorldMeters, polygon: WorldMeters[]): boolean {
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
-    const a = polygon[i];
-    const b = polygon[j];
-    if (a.z > point.z !== b.z > point.z && point.x < ((b.x - a.x) * (point.z - a.z)) / (b.z - a.z) + a.x) inside = !inside;
-  }
-  return inside;
-}
+// ---------------------------------------------------------------------------------------------
+// Buildings: towers with podiums and crowns, pitched roofs for houses, temples and warehouses,
+// shop awnings and signs on street fronts, rooftop tanks, AC units and antennas.
 
-function distanceToSegment(point: WorldMeters, road: LocalSegment): number {
-  const t = Math.max(0, Math.min(road.length, (point.x - road.a.x) * road.dx + (point.z - road.a.z) * road.dz));
-  return Math.hypot(point.x - (road.a.x + road.dx * t), point.z - (road.a.z + road.dz * t));
+const rooftopTankGeometry = new THREE.CylinderGeometry(1.1, 1.1, 2.2, 10).translate(0, 1.1, 0);
+const rooftopBoxGeometry = new THREE.BoxGeometry(2.2, 1.4, 1.8).translate(0, 0.7, 0);
+const antennaGeometry = new THREE.CylinderGeometry(0.12, 0.34, 14, 6).translate(0, 7, 0);
+for (const geometry of [rooftopTankGeometry, rooftopBoxGeometry, antennaGeometry]) {
+  geometry.userData.shared = true;
 }
-
-// Bangkok street frontage: contiguous shophouse rows with the odd tower on main roads.
-function proceduralFootprints(
-  tileId: string,
-  segments: LocalSegment[],
-  junctionTrim: (id: string, extra: number) => number,
-  blockers: MapArea[],
-  detail: RenderQualityProfile["quality"],
-): Footprint[] {
-  const cap = detail === "low" ? 260 : detail === "medium" ? 650 : 1200;
-  const footprints: Footprint[] = [];
-  const blockerBoxes = blockers.map((area) => {
-    const xs = area.outer.map((point) => point.x);
-    const zs = area.outer.map((point) => point.z);
-    return { area, minX: Math.min(...xs), maxX: Math.max(...xs), minZ: Math.min(...zs), maxZ: Math.max(...zs) };
-  });
-  const blocked = (point: WorldMeters) =>
-    blockerBoxes.some((box) => point.x >= box.minX && point.x <= box.maxX && point.z >= box.minZ && point.z <= box.maxZ && pointInPolygon(point, box.area.outer));
-
-  for (const road of segments) {
-    const kind = road.segment.kind;
-    if (kind === "motorway" || kind === "bridge" || kind === "service" || road.length < 25) continue;
-    const mainRoad = kind === "primary" || kind === "arterial" || kind === "secondary";
-    for (const side of [-1, 1]) {
-      let along = junctionTrim(road.a.id, SIDEWALK_WIDTH + 3) + 2;
-      const end = road.length - junctionTrim(road.b.id, SIDEWALK_WIDTH + 3) - 2;
-      let index = 0;
-      while (along < end && footprints.length < cap) {
-        const seed = hashString(`${tileId}:${road.segment.id}:${side}:${index++}`);
-        const tower = mainRoad && seed % 100 < 14;
-        const width = tower ? 26 + (seed % 16) : 8 + (seed % 5);
-        const depth = tower ? 24 + ((seed >>> 5) % 18) : 18 + ((seed >>> 5) % 10);
-        const gap = tower ? 8 + ((seed >>> 9) % 10) : (seed >>> 9) % 9 === 0 ? 5 + ((seed >>> 12) % 8) : 0.4;
-        if (along + width > end) break;
-        const offset = (road.half + SIDEWALK_WIDTH + 1.2 + depth / 2) * side;
-        const center = { x: road.a.x + road.dx * (along + width / 2) + road.nx * offset, z: road.a.z + road.dz * (along + width / 2) + road.nz * offset };
-        const clear =
-          !blocked(center) &&
-          segments.every((other) => other === road || distanceToSegment(center, other) > other.half + SIDEWALK_WIDTH + Math.max(width, depth) * 0.55);
-        if (clear) {
-          const hw = width / 2;
-          const hd = depth / 2;
-          const corner = (u: number, v: number) => ({
-            x: center.x + road.dx * u + road.nx * v * side,
-            z: center.z + road.dz * u + road.nz * v * side,
-          });
-          const floors = tower ? 12 + ((seed >>> 14) % 34) : 3 + ((seed >>> 14) % 3);
-          footprints.push({
-            points: [corner(-hw, -hd), corner(hw, -hd), corner(hw, hd), corner(-hw, hd)],
-            height: floors * 3.3 * MAP_SCALE,
-            kind: tower ? "commercial" : "generic",
-            seed: tower ? seed : seed | 1,
-          });
-        }
-        along += width + gap;
-      }
-    }
-  }
-  return footprints;
-}
+const AWNING_Y = 2.9 * MAP_SCALE;
+const glassColor = new THREE.Color("#23405c");
+const crossRed = new THREE.Color("#dc2626");
+const white = new THREE.Color("#ffffff");
+const stripeColors = ["#16a34a", "#f97316", "#dc2626"].map((color) => new THREE.Color(color));
 
 function signedArea(points: WorldMeters[]): number {
   let area = 0;
@@ -362,16 +339,24 @@ function signedArea(points: WorldMeters[]): number {
   return area / 2;
 }
 
-function extrudeFootprint(walls: GeometryBuffer, roofs: GeometryBuffer, footprint: Footprint, procedural: boolean): void {
-  const points = footprint.points;
-  if (points.length < 3) return;
-  const paletteKey = procedural ? (footprint.kind === "commercial" ? "tower" : "shophouse") : footprint.kind;
-  const wallColor = new THREE.Color(pick(wallPalettes[paletteKey], footprint.seed));
-  const baseColor = wallColor.clone().multiplyScalar(0.72);
-  const roofColor = new THREE.Color(pick(roofPalettes[paletteKey], footprint.seed >>> 3));
-  const height = Math.max(4, footprint.height);
+function centroidOf(points: WorldMeters[]): WorldMeters {
+  let x = 0;
+  let z = 0;
+  for (const point of points) {
+    x += point.x;
+    z += point.z;
+  }
+  return { x: x / points.length, z: z / points.length };
+}
+
+function scaledAround(points: WorldMeters[], factor: number): WorldMeters[] {
+  const center = centroidOf(points);
+  return points.map((point) => ({ x: center.x + (point.x - center.x) * factor, z: center.z + (point.z - center.z) * factor }));
+}
+
+function addWalls(walls: GeometryBuffer, points: WorldMeters[], y0: number, y1: number, bottom: THREE.Color, top: THREE.Color, seed: number): void {
   const orientation = Math.sign(signedArea(points)) || 1;
-  let perimeter = (footprint.seed % 7) * 3;
+  let perimeter = (seed % 7) * 3;
   for (let i = 0; i < points.length; i += 1) {
     const p = points[i];
     const q = points[(i + 1) % points.length];
@@ -384,33 +369,244 @@ function extrudeFootprint(walls: GeometryBuffer, roofs: GeometryBuffer, footprin
     const u0 = perimeter * FACADE_U;
     const u1 = (perimeter + length) * FACADE_U;
     walls.addQuad(
-      { x: p.x, y: 0, z: p.z },
-      { x: q.x, y: 0, z: q.z },
-      { x: q.x, y: height, z: q.z },
-      { x: p.x, y: height, z: p.z },
+      { x: p.x, y: y0, z: p.z },
+      { x: q.x, y: y0, z: q.z },
+      { x: q.x, y: y1, z: q.z },
+      { x: p.x, y: y1, z: p.z },
       normal,
       [
-        [u0, 0],
-        [u1, 0],
-        [u1, height * FACADE_V],
-        [u0, height * FACADE_V],
+        [u0, y0 * FACADE_V],
+        [u1, y0 * FACADE_V],
+        [u1, y1 * FACADE_V],
+        [u0, y1 * FACADE_V],
       ],
-      [baseColor, baseColor, wallColor, wallColor],
+      [bottom, bottom, top, top],
     );
     perimeter += length;
   }
+}
+
+function addCap(roofs: GeometryBuffer, points: WorldMeters[], y: number, color: THREE.Color): void {
   const contour = points.map((point) => new THREE.Vector2(point.x, point.z));
-  const triangles = THREE.ShapeUtils.triangulateShape(contour, []);
-  for (const [i, j, k] of triangles) {
-    const a = { x: points[i].x, y: height, z: points[i].z };
-    const b = { x: points[j].x, y: height, z: points[j].z };
-    const c = { x: points[k].x, y: height, z: points[k].z };
+  for (const [i, j, k] of THREE.ShapeUtils.triangulateShape(contour, [])) {
+    const a = { x: points[i].x, y, z: points[i].z };
+    const b = { x: points[j].x, y, z: points[j].z };
+    const c = { x: points[k].x, y, z: points[k].z };
     roofs.addTriangle(a, b, c, UP, [
       [a.x / 8, a.z / 8],
       [b.x / 8, b.z / 8],
       [c.x / 8, c.z / 8],
+    ], color);
+  }
+}
+
+function upwardNormal(a: Vec3, b: Vec3, c: Vec3): Vec3 {
+  const ux = b.x - a.x;
+  const uy = b.y - a.y;
+  const uz = b.z - a.z;
+  const vx = c.x - a.x;
+  const vy = c.y - a.y;
+  const vz = c.z - a.z;
+  let nx = uy * vz - uz * vy;
+  let ny = uz * vx - ux * vz;
+  let nz = ux * vy - uy * vx;
+  const length = Math.hypot(nx, ny, nz) || 1;
+  if (ny < 0) {
+    nx = -nx;
+    ny = -ny;
+    nz = -nz;
+  }
+  return { x: nx / length, y: ny / length, z: nz / length };
+}
+
+// Pitched roof with the ridge along the longer side of a four-cornered footprint.
+function addGableRoof(buffers: BuildingBuffers, points: WorldMeters[], eave: number, rise: number, roofColor: THREE.Color, gableColor: THREE.Color, overhang: number): void {
+  const [p0, p1, p2, p3] = points;
+  const longFirst = Math.hypot(p1.x - p0.x, p1.z - p0.z) >= Math.hypot(p2.x - p1.x, p2.z - p1.z);
+  const [a, b, c, d] = longFirst ? [p0, p1, p2, p3] : [p1, p2, p3, p0];
+  const mid = (m: WorldMeters, n: WorldMeters) => ({ x: (m.x + n.x) / 2, z: (m.z + n.z) / 2 });
+  const ridge0 = mid(d, a);
+  const ridge1 = mid(b, c);
+  const [oa, ob, oc, od] = scaledAround([a, b, c, d], overhang);
+  const [or0, or1] = scaledAround([ridge0, ridge1], overhang);
+  const v = (point: WorldMeters, y: number): Vec3 => ({ x: point.x, y, z: point.z });
+  const top = eave + rise;
+  const eaveDrop = eave - 0.4;
+  for (const [q0, q1, q2, q3] of [
+    [v(oa, eaveDrop), v(ob, eaveDrop), v(or1, top), v(or0, top)],
+    [v(oc, eaveDrop), v(od, eaveDrop), v(or0, top), v(or1, top)],
+  ]) {
+    buffers.roofs.addQuad(q0, q1, q2, q3, upwardNormal(q0, q1, q2), [
+      [0, 0],
+      [1, 0],
+      [1, 1],
+      [0, 1],
     ], roofColor);
   }
+  const center = centroidOf(points);
+  for (const [e0, e1, ridge] of [
+    [d, a, ridge0],
+    [b, c, ridge1],
+  ] as const) {
+    const out = { x: ridge.x - center.x, z: ridge.z - center.z };
+    const length = Math.hypot(out.x, out.z) || 1;
+    buffers.walls.addTriangle(v(e0, eave), v(e1, eave), v(ridge, top), { x: out.x / length, y: 0, z: out.z / length }, [
+      [0, 0],
+      [0.1, 0],
+      [0.05, 0.05],
+    ], gableColor);
+  }
+}
+
+function frontEdge(points: WorldMeters[]): { p: WorldMeters; q: WorldMeters; nx: number; nz: number; length: number } {
+  const p = points[0];
+  const q = points[1];
+  const length = Math.hypot(q.x - p.x, q.z - p.z) || 1;
+  const center = centroidOf(points);
+  let nx = -(q.z - p.z) / length;
+  let nz = (q.x - p.x) / length;
+  if (nx * ((p.x + q.x) / 2 - center.x) + nz * ((p.z + q.z) / 2 - center.z) < 0) {
+    nx = -nx;
+    nz = -nz;
+  }
+  return { p, q, nx, nz, length };
+}
+
+// A flat panel standing just in front of the street-facing wall.
+function addFacadePanel(buffer: GeometryBuffer, points: WorldMeters[], from: number, to: number, y0: number, y1: number, color: THREE.Color, offset = 0.14): void {
+  const { p, q, nx, nz, length } = frontEdge(points);
+  const dx = (q.x - p.x) / length;
+  const dz = (q.z - p.z) / length;
+  const at = (t: number, y: number): Vec3 => ({ x: p.x + dx * length * t + nx * offset, y, z: p.z + dz * length * t + nz * offset });
+  buffer.addQuad(at(from, y0), at(to, y0), at(to, y1), at(from, y1), { x: nx, y: 0, z: nz }, [
+    [0, 0],
+    [1, 0],
+    [1, 1],
+    [0, 1],
+  ], color);
+}
+
+function addAwning(buffer: GeometryBuffer, points: WorldMeters[], color: THREE.Color, depth: number): void {
+  const { p, q, nx, nz, length } = frontEdge(points);
+  const dx = (q.x - p.x) / length;
+  const dz = (q.z - p.z) / length;
+  const inset = Math.min(0.3, length * 0.05);
+  const a = { x: p.x + dx * inset, z: p.z + dz * inset };
+  const b = { x: q.x - dx * inset, z: q.z - dz * inset };
+  const quad: [Vec3, Vec3, Vec3, Vec3] = [
+    { x: a.x, y: AWNING_Y, z: a.z },
+    { x: b.x, y: AWNING_Y, z: b.z },
+    { x: b.x + nx * depth, y: AWNING_Y - 0.9, z: b.z + nz * depth },
+    { x: a.x + nx * depth, y: AWNING_Y - 0.9, z: a.z + nz * depth },
+  ];
+  buffer.addQuad(quad[0], quad[1], quad[2], quad[3], upwardNormal(quad[0], quad[1], quad[2]), [
+    [0, 0],
+    [1, 0],
+    [1, 1],
+    [0, 1],
+  ], color);
+}
+
+function prop(list: THREE.Matrix4[], point: WorldMeters, y: number, yaw: number, scale = 1): void {
+  list.push(new THREE.Matrix4().compose(new THREE.Vector3(point.x, y, point.z), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), new THREE.Vector3(scale, scale, scale)));
+}
+
+function addBuilding(buffers: BuildingBuffers, building: MapBuilding, origin: WorldMeters, detail: RenderQualityProfile["quality"]): void {
+  const points = building.footprint.map((point) => ({ x: point.x - origin.x, z: point.z - origin.z }));
+  if (points.length < 3) return;
+  const seed = hashString(building.id);
+  const key: PaletteKey = building.use ?? building.kind;
+  const wallColor = new THREE.Color(pick(wallPalettes[key], seed));
+  const baseColor = wallColor.clone().multiplyScalar(0.72);
+  const roofColor = new THREE.Color(pick(roofPalettes[key], seed >>> 3));
+  const height = Math.max(4, building.heightMeters * MAP_SCALE);
+  const use = building.use;
+  const quad = points.length === 4;
+  const center = centroidOf(points);
+  const yaw = ((seed >>> 5) % 628) / 100;
+  let roofTop = height;
+
+  if ((use === "condo" || use === "office" || use === "hotel") && (building.floors ?? 0) >= 8) {
+    const podium = Math.min(height * 0.3, (use === "condo" ? 3 : 4) * 3.3 * MAP_SCALE);
+    const tower = scaledAround(points, use === "office" ? 0.76 : use === "hotel" ? 0.8 : 0.82);
+    addWalls(buffers.walls, points, 0, podium, baseColor, wallColor.clone().multiplyScalar(0.9), seed);
+    addCap(buffers.roofs, points, podium, roofColor.clone().lerp(white, 0.35));
+    addWalls(buffers.walls, tower, podium, height, wallColor.clone().multiplyScalar(0.92), wallColor, seed >>> 2);
+    addCap(buffers.roofs, tower, height, roofColor);
+    if ((building.floors ?? 0) >= 24) {
+      const crown = scaledAround(tower, 0.55);
+      const crownHeight = 2.4 * MAP_SCALE;
+      addWalls(buffers.walls, crown, height, height + crownHeight, wallColor.clone().multiplyScalar(0.85), wallColor, seed >>> 4);
+      addCap(buffers.roofs, crown, height + crownHeight, roofColor);
+      roofTop = height + crownHeight;
+      if (use === "office" || (building.floors ?? 0) >= 38) prop(buffers.antennas, center, roofTop, 0, 0.8 + ((seed >>> 8) % 5) / 10);
+    }
+    if (use === "hotel" && building.facesStreet && quad) addFacadePanel(buffers.signs, points, 0.3, 0.7, podium - 3.2, podium - 0.6, pick(signColors, seed >>> 6));
+  } else if (quad && (use === "house" || use === "warehouse" || use === "school")) {
+    const rise = use === "warehouse" ? Math.min(3.5, height * 0.2) : use === "school" ? 3.2 : 3.6 * MAP_SCALE * 0.6;
+    const eave = Math.max(3, height - (use === "house" ? 0 : rise * 0.3));
+    addWalls(buffers.walls, points, 0, eave, baseColor, wallColor, seed);
+    addGableRoof(buffers, points, eave, rise, roofColor, wallColor, use === "warehouse" ? 1.02 : 1.08);
+    roofTop = eave + rise;
+  } else if (quad && use === "temple") {
+    const eave = height * 0.42;
+    const rise = height * 0.3;
+    addWalls(buffers.walls, points, 0, eave, wallColor.clone().multiplyScalar(0.9), wallColor, seed);
+    addGableRoof(buffers, points, eave, rise, roofColor, wallColor, 1.14);
+    const upper = scaledAround(points, 0.66);
+    const upperBase = eave + rise * 0.55;
+    addWalls(buffers.walls, upper, upperBase, upperBase + height * 0.12, wallColor, wallColor, seed >>> 3);
+    addGableRoof(buffers, upper, upperBase + height * 0.12, rise * 1.1, new THREE.Color(seed % 2 ? "#15803d" : "#c2410c"), wallColor, 1.1);
+    roofTop = upperBase + height * 0.12 + rise * 1.1;
+    prop(buffers.antennas, center, roofTop - 1, 0, 0.5);
+  } else {
+    addWalls(buffers.walls, points, 0, height, baseColor, wallColor, seed);
+    addCap(buffers.roofs, points, height, roofColor);
+  }
+
+  if (quad && building.facesStreet) {
+    if (use === "shophouse" || use === "market" || (use === "townhouse" && seed % 3 === 0)) {
+      addAwning(buffers.roofs, points, pick(awningColors, seed >>> 2), use === "market" ? 3.2 : 1.9);
+      if (use !== "townhouse") addFacadePanel(buffers.signs, points, 0.12, 0.88, AWNING_Y + 0.4, AWNING_Y + 2.2, pick(signColors, seed >>> 7));
+    } else if (use === "convenience") {
+      stripeColors.forEach((color, index) => addFacadePanel(buffers.signs, points, 0.04, 0.96, AWNING_Y + 0.5 + index * 0.55, AWNING_Y + 1.05 + index * 0.55, color));
+    } else if (use === "hospital") {
+      const y = height * 0.82;
+      addFacadePanel(buffers.signs, points, 0.44, 0.56, y - 3, y + 3, white);
+      addFacadePanel(buffers.signs, points, 0.475, 0.525, y - 2.4, y + 2.4, crossRed, 0.2);
+      addFacadePanel(buffers.signs, points, 0.455, 0.545, y - 0.8, y + 0.8, crossRed, 0.2);
+    } else if (use === "mall") {
+      addFacadePanel(buffers.signs, points, 0.3, 0.7, height * 0.72, height * 0.72 + 5, pick(signColors, seed >>> 7), 0.2);
+    }
+  }
+  if (use === "mall" && quad) {
+    const ring = scaledAround(points, 1.004);
+    addWalls(buffers.roofs, ring, height * 0.25, height * 0.6, glassColor, glassColor, seed);
+  }
+
+  if (detail === "low") return;
+  const roofSpot = (dx: number, dz: number) => ({ x: center.x + dx, z: center.z + dz });
+  if ((use === "shophouse" || use === "townhouse" || use === undefined) && seed % 2 === 0) {
+    prop(buffers.tanks, roofSpot(((seed >>> 3) % 5) - 2, ((seed >>> 6) % 5) - 2), roofTop, yaw, 0.7 + ((seed >>> 9) % 5) / 10);
+  }
+  if (use === "office" || use === "mall" || use === "hotel" || use === "hospital" || use === "condo" || use === "government") {
+    const count = 1 + ((seed >>> 4) % 3);
+    for (let i = 0; i < count; i += 1) {
+      const angle = yaw + (i * Math.PI * 2) / count;
+      prop(buffers.boxes, roofSpot(Math.cos(angle) * 4, Math.sin(angle) * 4), roofTop, yaw);
+    }
+    if (use === "condo") prop(buffers.tanks, roofSpot(-3, 2), roofTop, yaw, 1.3);
+  }
+}
+
+function addInstances(group: THREE.Group, geometry: THREE.BufferGeometry, material: THREE.Material, matrices: THREE.Matrix4[]): void {
+  if (!matrices.length) return;
+  const mesh = new THREE.InstancedMesh(geometry, material, matrices.length);
+  matrices.forEach((value, index) => mesh.setMatrixAt(index, value));
+  mesh.castShadow = false;
+  mesh.receiveShadow = true;
+  mesh.computeBoundingSphere();
+  group.add(mesh);
 }
 
 const treeTrunkGeometry = new THREE.CylinderGeometry(0.2, 0.32, 2.8, 6).translate(0, 1.4, 0);
