@@ -48,11 +48,22 @@ describe("routing over hand-traced roads", () => {
     ]);
   });
 
-  it("routes between the fallback tiles' streets", async () => {
-    const { fallbackRoadTiles } = await import("../src/data/roadTileFixtures");
+  it("routes across neighbouring procedural city tiles", async () => {
+    const { cityTileAt, cityTileId, parseCityTileId, generateCityTile } = await import("../src/data/proceduralCity");
     const { latLngToWorld } = await import("../src/data/coordinates");
     const { roadSegmentsForTiles } = await import("../src/simulation/roadGeometry");
-    const graph = buildRoadGraph(roadSegmentsForTiles(fallbackRoadTiles));
-    expect(findRoute(graph, latLngToWorld(13.752, 100.4928), latLngToWorld(13.75, 100.4913))).toBeTruthy();
+    const start = latLngToWorld(13.752, 100.4928);
+    const center = parseCityTileId(cityTileAt(start))!;
+    const tiles = [];
+    for (let dx = -1; dx <= 1; dx += 1) {
+      for (let dz = -1; dz <= 1; dz += 1) tiles.push(generateCityTile(cityTileId(center.ix + dx, center.iz + dz))!);
+    }
+    const graph = buildRoadGraph(roadSegmentsForTiles(tiles));
+    const goal = { x: start.x + 600, z: start.z + 450 };
+    const route = findRoute(graph, start, goal);
+    expect(route).toBeTruthy();
+    expect(route!.length).toBeGreaterThan(3);
+    const end = route![route!.length - 1];
+    expect(Math.hypot(end.x - goal.x, end.z - goal.z)).toBeLessThan(260);
   });
 });

@@ -129,12 +129,23 @@ export function createGrassMaterial(): THREE.MeshStandardMaterial {
 export function createGroundMaterial(): THREE.MeshStandardMaterial {
   const random = seeded(31);
   const map = makeCanvasTexture(256, (ctx, size) => {
-    ctx.fillStyle = "#6d7a5c";
+    // Dusty city lots: worn concrete and packed earth with the odd tuft of grass (parks have their own material).
+    ctx.fillStyle = "#8b877b";
     ctx.fillRect(0, 0, size, size);
-    for (let i = 0; i < 3000; i += 1) {
+    for (let i = 0; i < 3200; i += 1) {
       const tone = random();
-      ctx.fillStyle = tone > 0.6 ? "rgba(120, 112, 90, 0.35)" : "rgba(78, 104, 62, 0.35)";
+      ctx.fillStyle = tone > 0.75 ? "rgba(96, 112, 78, 0.3)" : tone > 0.4 ? "rgba(122, 116, 102, 0.35)" : "rgba(158, 152, 138, 0.3)";
       ctx.fillRect(random() * size, random() * size, 2 + random() * 3, 2 + random() * 3);
+    }
+    ctx.strokeStyle = "rgba(70, 66, 58, 0.18)";
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 18; i += 1) {
+      const x = random() * size;
+      const y = random() * size;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + (random() - 0.5) * 40, y + (random() - 0.5) * 40);
+      ctx.stroke();
     }
   });
   map.repeat.set(60, 60);

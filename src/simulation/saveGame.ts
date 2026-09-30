@@ -1,4 +1,4 @@
-import type { DriverStats, SaveGame } from "../types";
+import type { DriverStats, NavigationSave, NavTarget, SaveGame } from "../types";
 
 const KEY = "mosgame.save.v1";
 
@@ -38,6 +38,7 @@ export const defaultSaveGame: SaveGame = {
   vehiclePaint: {},
   discoveredPlaceIds: [],
   completedMissionIds: [],
+  navigation: { favorites: [], recent: [] },
   settings: {
     graphicsQuality: "medium",
     mapScaleMode: "real_1_1",
@@ -79,6 +80,7 @@ export function loadSave(storage: Storage = localStorage): SaveGame {
         stats: { ...defaultDriverStats, ...parsed.career?.stats },
       },
       vehicleUpgrades: { ...parsed.vehicleUpgrades },
+      navigation: sanitizeNavigation(parsed.navigation),
       vehiclePaint: { ...parsed.vehiclePaint },
       settings: { ...defaultSaveGame.settings, ...parsed.settings },
       activeVehicleId,
@@ -87,6 +89,40 @@ export function loadSave(storage: Storage = localStorage): SaveGame {
   } catch {
     return structuredClone(defaultSaveGame);
   }
+}
+
+export const MAX_FAVORITES = 12;
+export const MAX_RECENT = 8;
+
+function isNavTarget(value: unknown): value is NavTarget {
+  const target = value as Partial<NavTarget> | undefined;
+  return (
+    typeof target?.id === "string" &&
+    typeof target.label === "string" &&
+    (target.kind === "place" || target.kind === "building" || target.kind === "pin") &&
+    Number.isFinite(target.lat) &&
+    Number.isFinite(target.lng)
+  );
+}
+
+export function sanitizeNavigation(value?: Partial<NavigationSave>): NavigationSave {
+  return {
+    favorites: (Array.isArray(value?.favorites) ? value.favorites : []).filter(isNavTarget).slice(0, MAX_FAVORITES),
+    recent: (Array.isArray(value?.recent) ? value.recent : []).filter(isNavTarget).slice(0, MAX_RECENT),
+  };
+}
+
+// Favorites toggle by id; the newest entry goes first.
+export function toggleFavorite(navigation: NavigationSave, target: NavTarget): NavigationSave {
+  const exists = navigation.favorites.some((item) => item.id === target.id);
+  return {
+    ...navigation,
+    favorites: exists ? navigation.favorites.filter((item) => item.id !== target.id) : [target, ...navigation.favorites].slice(0, MAX_FAVORITES),
+  };
+}
+
+export function pushRecent(navigation: NavigationSave, target: NavTarget): NavigationSave {
+  return { ...navigation, recent: [target, ...navigation.recent.filter((item) => item.id !== target.id)].slice(0, MAX_RECENT) };
 }
 
 export function saveGame(save: SaveGame, storage: Storage = localStorage): void {
@@ -115,6 +151,7 @@ export function mergeCloudSave(local: SaveGame, cloud?: Partial<SaveGame>): Save
     completedMissionIds,
     discoveredPlaceIds,
     unlockedVehicles,
+    navigation: sanitizeNavigation(cloud.navigation ?? local.navigation),
     settings: { ...local.settings, ...cloud.settings },
   };
 }

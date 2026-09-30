@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { fallbackRoadTiles } from "../src/data/roadTileFixtures";
+import { fallbackTileAt } from "../src/data/roadTileFixtures";
+
+const homeTile = fallbackTileAt(13.7515, 100.4929);
 import { CollectibleField, generateTileCollectibles } from "../src/simulation/collectibles";
 import { nearestRoadPoint, roadSegmentsForTiles, type WorldRoadSegment } from "../src/simulation/roadGeometry";
 import { lanePosition, TrafficSystem } from "../src/simulation/traffic";
@@ -16,7 +18,7 @@ function seededRandom(seed = 1): () => number {
 
 describe("road coins and nitro", () => {
   it("places deterministic pickups on streamed roads", () => {
-    const tile = fallbackRoadTiles[0];
+    const tile = homeTile;
     const first = generateTileCollectibles(tile);
     expect(first.length).toBeGreaterThan(10);
     expect(generateTileCollectibles(tile)).toEqual(first);
@@ -29,8 +31,8 @@ describe("road coins and nitro", () => {
 
   it("collects nearby pickups and respawns them later", () => {
     const field = new CollectibleField(1_000);
-    field.setTiles([fallbackRoadTiles[0]]);
-    const target = generateTileCollectibles(fallbackRoadTiles[0])[0];
+    field.setTiles([homeTile]);
+    const target = generateTileCollectibles(homeTile)[0];
     const picked = field.collect(target, 1, 0);
     expect(picked.map((item) => item.id)).toContain(target.id);
     expect(field.nearby(target, 1, 10, 500).map((item) => item.id)).not.toContain(target.id);

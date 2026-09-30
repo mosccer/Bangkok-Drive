@@ -1,4 +1,4 @@
-import type { FastTravelPoint, GeoPoint, PlaceSummary } from "../types";
+import type { FastTravelPoint, GeoPoint } from "../types";
 import { distanceMetersBetweenGeo } from "../data/coordinates";
 
 export const FAST_TRAVEL_DISTANCE_METERS = 2_500;
@@ -7,10 +7,18 @@ export function shouldOfferFastTravel(from: GeoPoint, to: GeoPoint, thresholdMet
   return distanceMetersBetweenGeo(from, to) >= thresholdMeters;
 }
 
-export function createFastTravelPoint(from: GeoPoint, place: PlaceSummary): FastTravelPoint {
+export interface FastTravelTarget extends GeoPoint {
+  id: string;
+  label?: string;
+  nameTh?: string;
+  nameEn?: string;
+  name?: string;
+}
+
+export function createFastTravelPoint(from: GeoPoint, place: FastTravelTarget): FastTravelPoint {
   return {
     id: place.id,
-    label: place.nameTh || place.nameEn || place.name,
+    label: place.label || place.nameTh || place.nameEn || place.name || "จุดหมาย",
     target: { lat: place.lat, lng: place.lng },
     distanceMeters: distanceMetersBetweenGeo(from, { lat: place.lat, lng: place.lng }),
   };

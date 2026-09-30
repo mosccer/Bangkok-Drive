@@ -1,5 +1,6 @@
 import { isVehicleUnlocked } from "../data/vehicles";
 import { bangkokDistricts } from "../data/bangkokDistricts";
+import type { BuildingInfo } from "../data/buildingDetails";
 import { achievementDefinitions } from "../simulation/achievements";
 import { MAX_DRIFT_MULTIPLIER, type DriftState } from "../simulation/drift";
 import { formatRaceTime } from "../simulation/missionTimer";
@@ -9,6 +10,7 @@ import { mpsToKmh } from "../simulation/speed";
 import { getUpgradeLevels, MAX_UPGRADE_LEVEL, paintPalette, upgradeCost, upgradeLabels, upgradeSlots } from "../simulation/upgrades";
 import type {
   CameraMode,
+  GeoPoint,
   GuideReview,
   Mission,
   PlaceCategory,
@@ -20,6 +22,13 @@ import type {
   VehicleDefinition,
   VehicleState,
 } from "../types";
+
+// Anything the minimap or compass can point at: a place, a building or a dropped pin.
+export interface MapPoint {
+  id: string;
+  lat: number;
+  lng: number;
+}
 import { bearingDegrees, cardinalFor, escapeHtml, formatNumber, headingDegrees, relativeBearing } from "./format";
 
 export const MINIMAP_ZOOM_LEVELS = [0.12, 0.28, 0.05];
@@ -78,7 +87,7 @@ const minimapPalettes: Record<MinimapTheme, Record<string, string>> = {
   },
 };
 
-const categoryGlyphs: Partial<Record<PlaceCategory, string>> = {
+export const categoryGlyphs: Partial<Record<PlaceCategory, string>> = {
   temple: "🛕",
   cafe: "☕",
   bakery: "🥐",
@@ -162,7 +171,7 @@ const tabCategories: Record<Exclude<GuideTab, "all">, PlaceCategory[]> = {
   food: ["street_food", "restaurant"],
 };
 
-const categoryLabels: Record<PlaceCategory, string> = {
+export const categoryLabels: Record<PlaceCategory, string> = {
   tourist_attraction: "แหล่งท่องเที่ยว",
   temple: "วัด",
   museum: "พิพิธภัณฑ์",
@@ -197,6 +206,14 @@ export function formatDistance(meters: number): string {
   return meters < 1000 ? `${Math.round(meters / 10) * 10} ม.` : `${(meters / 1000).toFixed(1)} กม.`;
 }
 
+export function placeCategoryColor(category: PlaceCategory): string {
+  if (category === "cafe" || category === "bakery" || category === "dessert") return "#67e8f9";
+  if (category === "restaurant" || category === "street_food" || category === "market" || category === "night_market") return "#f97316";
+  if (category === "park") return "#84cc16";
+  if (category === "temple") return "#fbbf24";
+  return "#facc15";
+}
+
 function stars(score: number): string {
   const full = Math.round(score);
   return "★".repeat(full) + "☆".repeat(Math.max(0, 5 - full));
@@ -219,6 +236,9 @@ export interface HudHandlers {
   onJumpToPlayer: (playerId: string) => void;
   onCopyInvite: () => void;
   onToggleFullscreen: () => void;
+  onOpenMap: () => void;
+  onBuildingAction: (action: "navigate" | "favorite", buildingId: string) => void;
+  onCloseDetail: () => void;
 }
 
 type PanelName = "garage" | "missions" | "settings" | "guide" | "online";
@@ -257,6 +277,11 @@ export class Hud {
   private readonly guideList: HTMLElement;
   private readonly navChip: HTMLElement;
   private readonly navText: HTMLElement;
+  private readonly navDetail: HTMLElement;
+  private readonly navArrow: HTMLElement;
+  private readonly locationChip: HTMLElement;
+  private readonly roadLabel: HTMLElement;
+  private readonly districtLabel: HTMLElement;
   private guideEntries: GuideEntry[] = [];
   private guideTab: GuideTab = "all";
   private guideSearch = "";
@@ -287,8 +312,9 @@ export class Hud {
         <span class="objective-timer hidden" data-ui="objective-timer"></span>
       </div>
       <div class="nav-chip hidden" data-ui="nav-chip">
-        <span data-ui="nav-text"></span>
-        <button class="nav-cancel" data-ui="nav-cancel" aria-label="Stop navigation">×</button>
+        <span class="nav-arrow" data-ui="nav-arrow" aria-hidden="true"></span>
+        <span class="nav-lines"><strong data-ui="nav-text"></strong><small data-ui="nav-detail"></small></span>
+        <button class="nav-cancel" data-ui="nav-cancel" aria-label="ยกเลิกเส้นทาง (X)" title="ยกเลิกเส้นทาง (X)">×</button>
       </div>
       <div class="compass-wrapper">
         <div class="compass-needle">▼</div>
@@ -303,12 +329,17 @@ export class Hud {
         <button class="menu-button" data-ui="garage-button" data-icon="🚗" title="Garage (G)" aria-label="Garage">Garage</button>
         <button class="menu-button" data-ui="missions-button" data-icon="🎯" title="Missions (J)" aria-label="Missions">Missions</button>
         <button class="menu-button" data-ui="guide-button" data-icon="📍" title="Bangkok Guide (B)" aria-label="Guide">Guide</button>
+        <button class="menu-button" data-ui="map-button" data-icon="🗺" title="แผนที่ (N)" aria-label="Map">Map</button>
         <button class="menu-button online-button" data-ui="online-button" data-icon="👥" title="Multiplayer (O)" aria-label="Online">Online</button>
         <button class="icon-button" data-ui="settings-button" aria-label="Settings" title="Settings">⚙</button>
       </div>
       <div class="minimap-wrap">
-        <canvas class="minimap" width="360" height="360" data-ui="minimap"></canvas>
+        <canvas class="minimap" width="360" height="360" data-ui="minimap" title="แตะเพื่อเปิดแผนที่ (N)"></canvas>
         <span class="minimap-zoom" data-ui="minimap-zoom">M · 1x</span>
+      </div>
+      <div class="location-chip hidden" data-ui="location" aria-live="polite">
+        <b data-ui="road-name"></b>
+        <small data-ui="district-name"></small>
       </div>
       <div class="speedometer">
         <strong data-ui="speed">0</strong><span>km/h · <b data-ui="gear">N</b></span>
@@ -356,7 +387,7 @@ export class Hud {
       <button class="poi-prompt hidden" data-ui="poi-prompt"></button>
       <aside class="poi-drawer" data-ui="drawer" aria-live="polite">
         <div class="drawer-head">
-          <strong>Bangkok Guide</strong>
+          <strong data-ui="drawer-title">Bangkok Guide</strong>
           <button class="icon-button" data-ui="close-drawer" aria-label="Close">x</button>
         </div>
         <div class="drawer-body" data-ui="drawer-body"></div>
@@ -449,6 +480,10 @@ export class Hud {
             <span><kbd>H</kbd> Horn</span>
             <span><kbd>G</kbd> Garage</span>
             <span><kbd>J</kbd> Missions</span>
+            <span><kbd>N</kbd> แผนที่ / Map</span>
+            <span><kbd>X</kbd> ยกเลิกเส้นทาง</span>
+            <span><kbd>I</kbd> ดูตึกข้างหน้า</span>
+            <span><kbd>Click</kbd> ตึก = รายละเอียด</span>
           </div>
         </div>
       </div>
@@ -498,6 +533,11 @@ export class Hud {
     this.guideList = this.mustFind("[data-ui='guide-list']");
     this.navChip = this.mustFind("[data-ui='nav-chip']");
     this.navText = this.mustFind("[data-ui='nav-text']");
+    this.navDetail = this.mustFind("[data-ui='nav-detail']");
+    this.navArrow = this.mustFind("[data-ui='nav-arrow']");
+    this.locationChip = this.mustFind("[data-ui='location']");
+    this.roadLabel = this.mustFind("[data-ui='road-name']");
+    this.districtLabel = this.mustFind("[data-ui='district-name']");
     this.garageBody = this.mustFind("[data-ui='garage-body']");
     this.missionsBody = this.mustFind("[data-ui='missions-body']");
     this.settingsBody = this.mustFind("[data-ui='settings-body']");
@@ -513,12 +553,20 @@ export class Hud {
     this.compassVal = this.mustFind("[data-ui='compass-val']");
     this.initCompassTape();
 
-    this.mustFind("[data-ui='close-drawer']").addEventListener("click", () => this.closeDrawer());
+    this.mustFind("[data-ui='close-drawer']").addEventListener("click", () => {
+      this.closeDrawer();
+      this.handlers?.onCloseDetail();
+    });
     this.mustFind("[data-ui='garage-button']").addEventListener("click", () => this.togglePanel("garage"));
     this.mustFind("[data-ui='missions-button']").addEventListener("click", () => this.togglePanel("missions"));
     this.mustFind("[data-ui='settings-button']").addEventListener("click", () => this.togglePanel("settings"));
     this.mustFind("[data-ui='guide-button']").addEventListener("click", () => this.togglePanel("guide"));
     this.onlineButton.addEventListener("click", () => this.togglePanel("online"));
+    this.mustFind("[data-ui='map-button']").addEventListener("click", (event) => {
+      (event.currentTarget as HTMLElement).blur();
+      this.handlers?.onOpenMap();
+    });
+    this.minimap.addEventListener("click", () => this.handlers?.onOpenMap());
     this.mustFind("[data-ui='fullscreen']").addEventListener("click", () => this.handlers?.onToggleFullscreen());
     const nameInput = this.mustFind<HTMLInputElement>("[data-ui='online-name']");
     const roomInput = this.mustFind<HTMLInputElement>("[data-ui='online-room']");
@@ -571,10 +619,14 @@ export class Hud {
       }
     });
     this.drawerBody.addEventListener("click", (event) => {
-      const target = (event.target as HTMLElement).closest<HTMLElement>("[data-navigate]");
+      const target = (event.target as HTMLElement).closest<HTMLElement>("[data-navigate], [data-building-action]");
       if (target?.dataset.navigate) {
         this.handlers?.onNavigate(target.dataset.navigate);
         this.closeDrawer();
+      } else if (target?.dataset.buildingAction && target.dataset.building) {
+        const action = target.dataset.buildingAction === "favorite" ? "favorite" : "navigate";
+        this.handlers?.onBuildingAction(action, target.dataset.building);
+        if (action === "navigate") this.closeDrawer();
       }
     });
     this.mustFind("[data-ui='resume']").addEventListener("click", () => this.handlers?.onResume());
@@ -623,10 +675,10 @@ export class Hud {
     mission: Mission,
     save: SaveGame,
     nearby?: PlaceSummary,
-    waypoint?: PlaceSummary,
+    waypoint?: MapPoint,
     waypointLocal?: { x: number; z: number },
     missionState?: MissionHudState,
-    missionStop: PlaceSummary | undefined = waypoint,
+    missionStop?: PlaceSummary,
   ): void {
     this.speed.textContent = Math.round(Math.abs(mpsToKmh(vehicle.speed))).toString();
     this.gear.textContent = vehicle.gearMode === "reverse" ? "R" : vehicle.gearMode === "neutral" ? "N" : "D";
@@ -793,8 +845,8 @@ export class Hud {
   drawMinimap(
     vehicle: VehicleState,
     places: PlaceSummary[],
-    worldPosition: (place: PlaceSummary) => { x: number; z: number },
-    target?: PlaceSummary,
+    worldPosition: (point: GeoPoint) => { x: number; z: number },
+    target?: MapPoint,
     overlay?: MinimapOverlay,
   ): void {
     const ctx = this.minimapContext;
@@ -841,18 +893,28 @@ export class Hud {
         .filter(({ a, b }) => !(Math.max(a.x, b.x) < 0 || Math.min(a.x, b.x) > size || Math.max(a.y, b.y) < 0 || Math.min(a.y, b.y) > size));
       const major = (kind: string) => kind === "motorway" || kind === "primary" || kind === "arterial" || kind === "bridge";
       const roadWidth = (road: MinimapOverlay["roads"][number]) => Math.max(major(road.kind) ? 5 : 3.2, road.width * scale);
-      // Casings first, then fills, minor roads under major ones, so junctions merge cleanly.
+      // Casings first, then fills, minor roads under major ones, so junctions merge cleanly. Roads are
+      // batched into one path per width so a dense city is a handful of strokes, not thousands.
+      const batches = new Map<string, { major: boolean; width: number; lines: Array<{ a: { x: number; y: number }; b: { x: number; y: number } }> }>();
+      for (const { road, a, b } of visibleRoads) {
+        const isMajor = major(road.kind);
+        const width = Math.round(roadWidth(road) * 2) / 2;
+        const key = `${isMajor ? 1 : 0}:${width}`;
+        const batch = batches.get(key);
+        if (batch) batch.lines.push({ a, b });
+        else batches.set(key, { major: isMajor, width, lines: [{ a, b }] });
+      }
+      const ordered = [...batches.values()].sort((x, y) => Number(x.major) - Number(y.major) || x.width - y.width);
       for (const pass of ["casing", "fill"] as const) {
-        for (const drawMajor of [false, true]) {
-          for (const { road, a, b } of visibleRoads) {
-            if (major(road.kind) !== drawMajor) continue;
-            ctx.strokeStyle = pass === "casing" ? (drawMajor ? palette.majorCasing : palette.casing) : drawMajor ? palette.major : palette.road;
-            ctx.lineWidth = roadWidth(road) + (pass === "casing" ? 2.4 : 0);
-            ctx.beginPath();
+        for (const batch of ordered) {
+          ctx.strokeStyle = pass === "casing" ? (batch.major ? palette.majorCasing : palette.casing) : batch.major ? palette.major : palette.road;
+          ctx.lineWidth = batch.width + (pass === "casing" ? 2.4 : 0);
+          ctx.beginPath();
+          for (const { a, b } of batch.lines) {
             ctx.moveTo(a.x, a.y);
             ctx.lineTo(b.x, b.y);
-            ctx.stroke();
           }
+          ctx.stroke();
         }
       }
 
@@ -1039,7 +1101,13 @@ export class Hud {
     this.minimapZoomLabel.textContent = `M · ${["1x", "2x", "½x"][zoomIndex] ?? "1x"}`;
   }
 
+  private setDrawerTitle(title: string): void {
+    const element = this.mustFind("[data-ui='drawer-title']");
+    if (element.textContent !== title) element.textContent = title;
+  }
+
   openDetail(detail: PlaceDetail, distanceMeters?: number): void {
+    this.setDrawerTitle("Bangkok Guide");
     const review = detail.guideReview;
     const secondaryName = detail.nameEn && detail.nameEn !== placeDisplayName(detail) ? detail.nameEn : "";
     const description = review ? "" : (detail.descriptionTh ?? detail.description ?? "");
@@ -1289,9 +1357,38 @@ export class Hud {
     return this.pointerOverPanel;
   }
 
-  setNavigation(text?: string): void {
+  setNavigation(text?: string, detail = "", arrow = "📍"): void {
     this.navChip.classList.toggle("hidden", !text);
-    if (text && this.navText.textContent !== text) this.navText.textContent = text;
+    if (!text) return;
+    if (this.navText.textContent !== text) this.navText.textContent = text;
+    if (this.navDetail.textContent !== detail) this.navDetail.textContent = detail;
+    if (this.navArrow.textContent !== arrow) this.navArrow.textContent = arrow;
+  }
+
+  setLocation(road?: string, district?: string): void {
+    this.locationChip.classList.toggle("hidden", !road && !district);
+    if ((road ?? "") !== this.roadLabel.textContent) this.roadLabel.textContent = road ?? "";
+    if ((district ?? "") !== this.districtLabel.textContent) this.districtLabel.textContent = district ?? "";
+  }
+
+  openBuildingDetail(info: BuildingInfo, distanceMeters: number, favorite: boolean): void {
+    this.setDrawerTitle("ข้อมูลอาคาร · Building");
+    this.drawerBody.innerHTML = `
+      <h2>${escapeHtml(info.icon)} ${escapeHtml(info.title)}</h2>
+      <p class="place-sub">${escapeHtml([info.subtitle, formatDistance(distanceMeters)].filter(Boolean).join(" · "))}${info.landmark ? ` <span class="landmark-badge">แลนด์มาร์ก</span>` : ""}</p>
+      <div class="drawer-actions">
+        <button class="primary-button" data-building-action="navigate" data-building="${escapeHtml(info.id)}">นำทางไปที่นี่</button>
+        <button class="ghost-button" data-building-action="favorite" data-building="${escapeHtml(info.id)}">${favorite ? "★ บันทึกแล้ว" : "☆ บันทึก"}</button>
+      </div>
+      <dl>${info.facts.map((fact) => `<dt>${escapeHtml(fact.label)}</dt><dd>${escapeHtml(fact.value)}</dd>`).join("")}</dl>
+      ${
+        info.tenants.length
+          ? `<section class="building-tenants"><h3>ภายในอาคาร</h3><ul>${info.tenants.map((tenant) => `<li>${escapeHtml(tenant)}</li>`).join("")}</ul></section>`
+          : ""
+      }
+      <p class="attribution">ข้อมูลอาคารจำลองในเกม</p>
+    `;
+    this.drawer.classList.add("open");
   }
 
   private renderGuide(): void {
@@ -1361,6 +1458,9 @@ export class Hud {
         <span><kbd>Shift</kbd> Nitro</span>
         <span><kbd>C</kbd> Camera</span>
         <span><kbd>M</kbd> Map zoom</span>
+        <span><kbd>N</kbd> แผนที่ · ปักหมุด</span>
+        <span><kbd>X</kbd> ยกเลิกเส้นทาง</span>
+        <span><kbd>I</kbd> ดูตึกข้างหน้า</span>
         <span><kbd>R</kbd> Back to road</span>
         <span><kbd>H</kbd> Horn</span>
       </section>
@@ -1389,10 +1489,6 @@ export class Hud {
   }
 
   private placeColor(category: PlaceCategory): string {
-    if (category === "cafe" || category === "bakery" || category === "dessert") return "#67e8f9";
-    if (category === "restaurant" || category === "street_food" || category === "market" || category === "night_market") return "#f97316";
-    if (category === "park") return "#84cc16";
-    if (category === "temple") return "#fbbf24";
-    return "#facc15";
+    return placeCategoryColor(category);
   }
 }

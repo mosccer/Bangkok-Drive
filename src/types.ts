@@ -331,6 +331,7 @@ export interface SaveGame {
   vehiclePaint: Record<string, string>;
   discoveredPlaceIds: string[];
   completedMissionIds: string[];
+  navigation: NavigationSave;
   settings: {
     graphicsQuality: GraphicsQuality;
     mapScaleMode: MapScaleMode;
@@ -381,13 +382,41 @@ export interface RoadChunk {
 
 export type MapBuildingKind = "temple" | "commercial" | "residential" | "civic" | "industrial" | "generic";
 
+export type BuildingUse =
+  | "shophouse"
+  | "townhouse"
+  | "house"
+  | "condo"
+  | "office"
+  | "hotel"
+  | "mall"
+  | "temple"
+  | "school"
+  | "hospital"
+  | "market"
+  | "warehouse"
+  | "government"
+  | "convenience";
+
 // Footprints are in world meters (already multiplied by MAP_SCALE); heights are real-world meters.
+// Everything after `name` is optional detail: generated for the procedural city, sparse for OSM.
 export interface MapBuilding {
   id: string;
   footprint: WorldMeters[];
   heightMeters: number;
   kind: MapBuildingKind;
   name?: string;
+  nameEn?: string;
+  use?: BuildingUse;
+  floors?: number;
+  address?: string;
+  roadName?: string;
+  districtId?: string;
+  yearBuilt?: number;
+  tenants?: string[];
+  landmark?: boolean;
+  // True when footprint[0] -> footprint[1] is the street-facing wall (awnings and shop signs go there).
+  facesStreet?: boolean;
 }
 
 export type MapAreaKind = "water" | "park" | "temple_ground";
@@ -425,7 +454,7 @@ export interface RoadTileManifest {
   tileSizeMeters: number;
   generatedAt: string;
   tiles: RoadTileManifestEntry[];
-  source?: "fallback" | "osm";
+  source?: "fallback" | "osm" | "procedural";
   mapScale?: number;
   areasHref?: string;
   placesHref?: string;
@@ -439,6 +468,22 @@ export interface StreamingMapState {
   visibleTileIds: string[];
   loadedTiles: RoadTile[];
   tileSizeMeters: number;
+}
+
+// A navigation destination: a guide place, a building or a pin dropped anywhere on the map.
+export interface NavTarget {
+  id: string;
+  kind: "place" | "building" | "pin";
+  label: string;
+  lat: number;
+  lng: number;
+  placeId?: string;
+  buildingId?: string;
+}
+
+export interface NavigationSave {
+  favorites: NavTarget[];
+  recent: NavTarget[];
 }
 
 export interface FastTravelPoint {

@@ -1,6 +1,8 @@
 import type { MapArea, PlaceSummary, RoadTile, RoadTileManifest } from "../types";
 import { fallbackMapAreas } from "../data/fallbackMapAreas";
-import { fallbackRoadTileManifest, fallbackRoadTiles } from "../data/roadTileFixtures";
+import { fallbackRoadTileManifest, loadFallbackTile } from "../data/roadTileFixtures";
+
+const TILE_CACHE_LIMIT = 400;
 
 export class RoadTileStore {
   private manifest?: RoadTileManifest;
@@ -8,11 +10,7 @@ export class RoadTileStore {
   private places?: Promise<PlaceSummary[]>;
   private readonly cache = new Map<string, RoadTile>();
 
-  constructor(private readonly manifestUrl = "/data/road-tiles/index.json") {
-    for (const tile of fallbackRoadTiles) {
-      this.cache.set(tile.id, { ...tile, loadedAt: performance.now() });
-    }
-  }
+  constructor(private readonly manifestUrl = "/data/road-tiles/index.json") {}
 
   async loadManifest(): Promise<RoadTileManifest> {
     if (this.manifest) return this.manifest;
@@ -22,30 +20,47 @@ export class RoadTileStore {
       if (!response.ok) throw new Error(`Road tile manifest failed: ${response.status}`);
       this.manifest = (await response.json()) as RoadTileManifest;
     } catch {
-      this.manifest = fallbackRoadTileManifest;
+      this.manifest = fallbackRoadTileManifest();
     }
 
     return this.manifest;
   }
 
+  // Imported OSM tiles are fetched; procedural tiles are generated on demand. Both are kept in a
+  // small LRU cache so driving back and forth does not rebuild them.
   async loadTile(id: string): Promise<RoadTile | undefined> {
     const cached = this.cache.get(id);
-    if (cached) return { ...cached, loadedAt: performance.now() };
+    if (cached) {
+      this.cache.delete(id);
+      this.cache.set(id, cached);
+      return { ...cached, loadedAt: performance.now() };
+    }
 
     const manifest = await this.loadManifest();
-    const entry = manifest.tiles.find((tile) => tile.id === id);
-    if (!entry) return undefined;
-
-    try {
-      const response = await fetch(entry.href);
-      if (!response.ok) throw new Error(`Road tile failed: ${response.status}`);
-      const tile = (await response.json()) as RoadTile;
-      const loaded = { ...tile, loadedAt: performance.now() };
-      this.cache.set(tile.id, loaded);
-      return loaded;
-    } catch {
-      return undefined;
+    let tile: RoadTile | undefined;
+    if (manifest.source === "procedural") {
+      tile = loadFallbackTile(id);
+    } else {
+      const entry = manifest.tiles.find((candidate) => candidate.id === id);
+      if (!entry) return undefined;
+      try {
+        const response = await fetch(entry.href);
+        if (!response.ok) throw new Error(`Road tile failed: ${response.status}`);
+        tile = (await response.json()) as RoadTile;
+      } catch {
+        return undefined;
+      }
     }
+    if (!tile) return undefined;
+    const loaded = { ...tile, loadedAt: performance.now() };
+    this.cache.set(id, loaded);
+    if (this.cache.size > TILE_CACHE_LIMIT) this.cache.delete(this.cache.keys().next().value!);
+    return loaded;
+  }
+
+  // Tiles already generated or downloaded, without triggering new work (used by the world map).
+  peekTile(id: string): RoadTile | undefined {
+    return this.cache.get(id);
   }
 
   // Water and park polygons span many tiles, so they are stored once for the whole map.
