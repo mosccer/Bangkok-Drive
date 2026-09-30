@@ -42,7 +42,7 @@ import { createVehicleMesh } from "./objects/vehicleMesh";
 import { createTrafficMesh } from "./objects/trafficMeshes";
 import { SkyEnvironment, type MoodPreset } from "./environment/SkyEnvironment";
 import { areaBounds, buildAreaObject, type AreaMaterials } from "./world/areaBuilder";
-import { buildTileGroup, disposeGroup, type WorldMaterials } from "./world/tileBuilder";
+import { disposeGroup, tileGroupSteps, type WorldMaterials } from "./world/tileBuilder";
 import { createSpeedEffectState, createVehicleVisualState, defaultArcadeVisualSettings } from "./arcadeVisuals";
 import { getRenderQualityProfile } from "./quality";
 import { AdaptiveResolution } from "./adaptiveResolution";
@@ -214,6 +214,7 @@ export class WorldRenderer {
   private readonly adaptiveResolution = new AdaptiveResolution();
   private lastRenderTime = 0;
   private readonly pendingTiles = new Map<string, RoadTile>();
+  private activeBuild?: { tile: RoadTile; steps: Generator<void, THREE.Group> };
   private readonly raycaster = new THREE.Raycaster();
   private readonly selectionGroup = new THREE.Group();
   private selectedBuilding?: MapBuilding;
@@ -255,6 +256,9 @@ export class WorldRenderer {
       roofs: this.facade.roofs,
       signs: new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }),
       props: new THREE.MeshStandardMaterial({ color: "#cbd5e1", roughness: 0.55, metalness: 0.35 }),
+      gold: new THREE.MeshStandardMaterial({ color: "#d4a82a", emissive: "#6b4a00", emissiveIntensity: 0.35, roughness: 0.3, metalness: 0.85 }),
+      concrete: new THREE.MeshStandardMaterial({ color: "#a3a39c", roughness: 0.92 }),
+      wires: new THREE.LineBasicMaterial({ color: "#1d2024", transparent: true, opacity: 0.85 }),
       treeTrunk,
       treeLeaves,
       lampPole: new THREE.MeshStandardMaterial({ color: "#4b5563", roughness: 0.5, metalness: 0.6 }),
@@ -505,19 +509,40 @@ export class WorldRenderer {
     for (const id of [...this.pendingTiles.keys()]) {
       if (!active.has(id)) this.pendingTiles.delete(id);
     }
+    if (this.activeBuild && !active.has(this.activeBuild.tile.id)) this.activeBuild = undefined;
     for (const tile of tiles) {
       if (!this.roadTileGroups.has(tile.id)) this.pendingTiles.set(tile.id, tile);
     }
   }
 
-  // Builds every queued tile now (after a teleport, so the player never lands in an empty world).
-  flushTileBuilds(center: { x: number; z: number }, radius = Number.POSITIVE_INFINITY): void {
+  // Builds the queued tiles near a point while yielding to the browser, so a loading bar can move.
+  async buildTilesAround(center: { x: number; z: number }, radius: number, onProgress?: (done: number, total: number) => void): Promise<void> {
     this.vehiclePosition.set(center.x, 0, center.z);
-    for (const tile of this.orderedPendingTiles()) {
+    const tiles = this.orderedPendingTiles().filter((tile) => {
       const local = worldMetersToLocal(tile.originMeters, this.worldAnchor);
-      if (Math.hypot(local.x - center.x, local.z - center.z) > radius) continue;
-      this.buildTile(tile);
+      return Math.hypot(local.x - center.x, local.z - center.z) <= radius;
+    });
+    let sliceStart = performance.now();
+    onProgress?.(0, tiles.length);
+    for (let index = 0; index < tiles.length; index += 1) {
+      this.buildTile(tiles[index]);
+      onProgress?.(index + 1, tiles.length);
+      if (performance.now() - sliceStart > 24) {
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+        sliceStart = performance.now();
+      }
     }
+  }
+
+  // Compiles every shader in the scene up front so the first frames of driving don't stutter.
+  async warmUp(): Promise<void> {
+    try {
+      if (this.renderer.extensions.has("KHR_parallel_shader_compile")) await this.renderer.compileAsync(this.scene, this.camera);
+      else this.renderer.compile(this.scene, this.camera);
+    } catch {
+      // The first render compiles instead.
+    }
+    this.renderer.render(this.scene, this.camera);
   }
 
   get pendingTileCount(): number {
@@ -532,20 +557,45 @@ export class WorldRenderer {
     return [...this.pendingTiles.values()].sort((a, b) => distance(a) - distance(b));
   }
 
+  // Advances tile builds in small steps within a per-frame time budget, nearest tile first.
   private buildPendingTiles(): void {
-    if (!this.pendingTiles.size) return;
+    if (!this.pendingTiles.size && !this.activeBuild) return;
     const start = performance.now();
-    const budget = this.isMobileViewport() ? 5 : 9;
-    for (const tile of this.orderedPendingTiles()) {
-      this.buildTile(tile);
-      if (performance.now() - start > budget) break;
+    const budget = this.isMobileViewport() ? 4 : 7;
+    while (performance.now() - start < budget) {
+      if (!this.activeBuild) {
+        const next = this.orderedPendingTiles()[0];
+        if (!next) return;
+        this.pendingTiles.delete(next.id);
+        if (this.roadTileGroups.has(next.id)) continue;
+        this.activeBuild = { tile: next, steps: tileGroupSteps(next, { materials: this.worldMaterials, quality: this.qualityProfile }) };
+      }
+      const step = this.activeBuild.steps.next();
+      if (step.done) {
+        this.addTileGroup(this.activeBuild.tile, step.value);
+        this.activeBuild = undefined;
+      }
     }
   }
 
   private buildTile(tile: RoadTile): void {
     this.pendingTiles.delete(tile.id);
     if (this.roadTileGroups.has(tile.id)) return;
-    const group = buildTileGroup(tile, { materials: this.worldMaterials, quality: this.qualityProfile });
+    const steps = tileGroupSteps(tile, { materials: this.worldMaterials, quality: this.qualityProfile });
+    for (;;) {
+      const step = steps.next();
+      if (step.done) {
+        this.addTileGroup(tile, step.value);
+        return;
+      }
+    }
+  }
+
+  private addTileGroup(tile: RoadTile, group: THREE.Group): void {
+    if (this.roadTileGroups.has(tile.id)) {
+      disposeGroup(group);
+      return;
+    }
     const local = worldMetersToLocal(tile.originMeters, this.worldAnchor);
     group.position.set(local.x, 0, local.z);
     this.roadTileGroups.set(tile.id, { group, tile });
@@ -1024,6 +1074,7 @@ export class WorldRenderer {
   };
 
   private clearRoadTileGroups(): void {
+    this.activeBuild = undefined;
     for (const { group } of this.roadTileGroups.values()) {
       this.scene.remove(group);
       disposeGroup(group);

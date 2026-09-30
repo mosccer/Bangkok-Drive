@@ -36,6 +36,7 @@ import { closestPointOnSegment, polygonCentroid } from "../../simulation/geometr
 import { formatEta, hasArrived, maneuverLabels, placeToNavTarget, routeProgress } from "../../simulation/navigation";
 import { PedestrianSystem } from "../../simulation/pedestrians";
 import { WorldMap, type MapRoad } from "../../ui/WorldMap";
+import { LoadingScreen, withTimeout } from "../../ui/LoadingScreen";
 import { getVehicleDefinition, isVehicleUnlocked, vehicleDefinitions } from "../../data/vehicles";
 import { InputController, type UiActions } from "../../input/InputController";
 import { PhysicsWorld } from "../../physics/PhysicsWorld";
@@ -181,6 +182,8 @@ export class GameApp {
   private lastLocationRefresh = 0;
   private lastDistrictId = "";
   private mapSource?: string;
+  private readonly loading = new LoadingScreen();
+  private warping = false;
   private mapAreas: MapArea[] = [];
   private roadGraph?: RoadGraph;
   private routeWorld?: WorldMeters[];
@@ -259,8 +262,12 @@ export class GameApp {
   }
 
   async start(): Promise<void> {
+    const loading = this.loading;
+    loading.setProgress(0.06, "เตรียมเครื่องยนต์และฟิสิกส์…");
     void this.physics.init().catch((error) => console.warn("Physics unavailable", error));
+    loading.setProgress(0.12, "โหลดสถานที่และแผนที่กรุงเทพฯ…");
     await Promise.all([this.refreshPlaces(), this.loadMapLayers()]);
+    loading.setProgress(0.28, "วางถนนรอบตัวคุณ…");
     const requestedStart = parseStartParam(window.location.search);
     if (requestedStart) {
       this.worldAnchor = createWorldAnchor(requestedStart, this.worldAnchor.version + 1);
@@ -270,18 +277,34 @@ export class GameApp {
     this.vehicle.teleportLocal(startOnRoad.x, startOnRoad.z, Math.PI / 2, 0);
     await this.updateStreaming(true);
     this.snapToRoad();
-    this.renderer.flushTileBuilds(this.vehicle.state.position, 900);
-    this.profile = await this.online.ensureProfile();
-    const cloud = await this.online.loadCloudSave(this.profile.id);
+    loading.setProgress(0.4, "สร้างตึกและเมือง…");
+    await this.renderer.buildTilesAround(this.vehicle.state.position, 900, (done, total) => {
+      loading.setProgress(0.4 + 0.38 * (done / Math.max(1, total)), `สร้างตึกและเมือง… ${done}/${total}`);
+    });
+    loading.setProgress(0.8, "โหลดโปรไฟล์และเซฟ…");
+    this.profile = await withTimeout(this.online.ensureProfile(), 6_000);
+    const cloud = this.profile ? await withTimeout(this.online.loadCloudSave(this.profile.id), 5_000) : undefined;
     this.save = this.withDailyChallenges(mergeCloudSave(this.save, cloud));
     this.resetInterruptedTimedRun();
     this.applySettings();
     this.applyVehicle(this.save.activeVehicleId);
     this.refreshPanels(true);
-    await this.joinRoom();
+    loading.setProgress(0.88, "เข้าห้องออนไลน์…");
+    await withTimeout(this.joinRoom(), 5_000);
+    loading.setProgress(0.94, "เตรียมกราฟิก…");
+    this.renderer.update(this.vehicle.state);
+    await this.renderer.warmUp();
+    loading.setProgress(1, "พร้อมออกตัว!");
     this.hud.toast("Welcome to Bangkok", "N = แผนที่ปักหมุด · คลิกตึกดูรายละเอียด · J = missions", "info");
     this.running = true;
+    this.lastTime = performance.now();
     requestAnimationFrame(this.tick);
+    loading.hide(350);
+  }
+
+  // Shown by main.ts when start-up fails (for example without WebGL2).
+  showStartupError(message: string): void {
+    this.loading.fail(message);
   }
 
   dispose(): void {
@@ -303,7 +326,7 @@ export class GameApp {
     }
     this.handleUiActions(ui);
 
-    if (!this.paused && !this.worldMap.isOpen) {
+    if (!this.paused && !this.worldMap.isOpen && !this.warping) {
       const steering = actions.steerLeft !== actions.steerRight;
       const drifting = isDrifting({ handbrake: actions.handbrake, steering, speedMps: this.vehicle.state.speed });
       const nitroUpdate = updateNitro(
@@ -1625,6 +1648,8 @@ export class GameApp {
       this.hud.toast("Fast travel penalty", `+${FAST_TRAVEL_PENALTY_SECONDS}s on the clock`, "warning");
     }
     this.commitSave(addStat(this.save, "fastTravels", 1));
+    this.warping = true;
+    this.loading.showWarp("⚡ กำลังวาร์ป…");
     this.worldAnchor = createWorldAnchor(point.target, this.worldAnchor.version + 1);
     this.vehicle.teleportLocal(0, 0, yaw, 0);
     this.renderer.setWorldOriginOffset(this.worldAnchor);
@@ -1634,8 +1659,17 @@ export class GameApp {
     this.drift = createDriftState();
     this.detailRequest = undefined;
     this.lastPickupRefresh = 0;
-    await this.updateStreaming(true);
-    this.snapToRoad(yaw);
-    this.renderer.flushTileBuilds(this.vehicle.state.position, 900);
+    try {
+      await this.updateStreaming(true);
+      this.snapToRoad(yaw);
+      this.loading.setProgress(0.3, "⚡ กำลังวาร์ป… สร้างเมืองปลายทาง");
+      await this.renderer.buildTilesAround(this.vehicle.state.position, 900, (done, total) => {
+        this.loading.setProgress(0.3 + 0.7 * (done / Math.max(1, total)), `⚡ กำลังวาร์ป… ${done}/${total}`);
+      });
+    } finally {
+      this.warping = false;
+      this.renderer.resetFrameTimer();
+      this.loading.hide(120);
+    }
   }
 }

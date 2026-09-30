@@ -471,34 +471,37 @@ function frontageFor(edge: CityRoadEdge, context: BuildingPlacementContext): Can
   for (const side of [-1, 1]) {
     let along = 3 + (hashString(`${edge.id}|${side}`) % 7);
     let index = 0;
-    while (along < length - 4 && index < 300) {
+    while (along < length - 4 && index < 400) {
       const seed = hashString(`${edge.id}|${side}|${index}`);
       index += 1;
       const probe = { x: edge.a.x + dx * along, z: edge.a.z + dz * along };
       const density = context.density(probe);
-      let use = pickFrontageUse(edge.kind, density, seed);
-      let dims = buildingDimensions(use, seed, density);
-      if (along + dims.width > length - 4 && use !== "shophouse") {
-        use = "shophouse";
-        dims = buildingDimensions(use, seed, density);
-      }
-      if (along + dims.width > length - 4) break;
-      const row = use === "shophouse" || use === "townhouse";
-      const gap = row ? ((seed >>> 9) % 13 === 0 ? 4 + ((seed >>> 13) % 7) : 0.4) : 3 + ((seed >>> 9) % 7);
-      const centerAlong = along + dims.width / 2;
-      const offset = (half + SIDEWALK + 1.2 + dims.depth / 2) * side;
-      const center = { x: edge.a.x + dx * centerAlong + nx * offset, z: edge.a.z + dz * centerAlong + nz * offset };
-      const piece = ownPieces[Math.min(ownPieces.length - 1, Math.floor(centerAlong / pieceLength))];
-      const hw = dims.width / 2;
-      const hd = dims.depth / 2;
-      const corner = (u: number, v: number) => ({ x: center.x + dx * u + nx * v * side, z: center.z + dz * u + nz * v * side });
-      const polygon = [corner(-hw, -hd), corner(hw, -hd), corner(hw, hd), corner(-hw, hd)];
-      const bounds = polygonBounds(polygon);
-      if (piece.kept && footprintClear(polygon, center, Math.hypot(hw, hd), context) && clearOfRoads(polygon, bounds, near)) {
+      const picked = pickFrontageUse(edge.kind, density, seed);
+      // Big buildings that don't fit (junction corners, short blocks) fall back to a narrow shophouse,
+      // and a spot where nothing fits is skipped in small steps so corners fill up as soon as they can.
+      let placed = false;
+      for (const use of picked === "shophouse" ? (["shophouse"] as const) : ([picked, "shophouse"] as const)) {
+        const dims = buildingDimensions(use, use === picked ? seed : seed >>> 1, density);
+        if (along + dims.width > length - 4) continue;
+        const row = use === "shophouse" || use === "townhouse";
+        const gap = row ? ((seed >>> 9) % 13 === 0 ? 4 + ((seed >>> 13) % 7) : 0.4) : 3 + ((seed >>> 9) % 7);
+        const centerAlong = along + dims.width / 2;
+        const offset = (half + SIDEWALK + 1.2 + dims.depth / 2) * side;
+        const center = { x: edge.a.x + dx * centerAlong + nx * offset, z: edge.a.z + dz * centerAlong + nz * offset };
+        const piece = ownPieces[Math.min(ownPieces.length - 1, Math.floor(centerAlong / pieceLength))];
+        const hw = dims.width / 2;
+        const hd = dims.depth / 2;
+        const corner = (u: number, v: number) => ({ x: center.x + dx * u + nx * v * side, z: center.z + dz * u + nz * v * side });
+        const polygon = [corner(-hw, -hd), corner(hw, -hd), corner(hw, hd), corner(-hw, hd)];
+        const bounds = polygonBounds(polygon);
+        if (!piece.kept || !footprintClear(polygon, center, Math.hypot(hw, hd), context) || !clearOfRoads(polygon, bounds, near)) continue;
         const houseNumber = `${Math.floor(along / 9) * 2 + (side > 0 ? 1 : 2)}${row && seed % 3 === 0 ? `/${(seed >>> 4) % 40}` : ""}`;
-        result.push(makeBuilding(`${edge.id}|${side}|${index}`, polygon, use, dims, seed, edge.name, houseNumber, true, context));
+        result.push(makeBuilding(`${edge.id}|${side}|${index}`, polygon, use, dims, use === picked ? seed : seed >>> 1, edge.name, houseNumber, true, context));
+        along += dims.width + gap;
+        placed = true;
+        break;
       }
-      along += dims.width + gap;
+      if (!placed) along += 4;
     }
   }
   return remember(frontageCache, edge.id, result, 4_000);
@@ -530,39 +533,87 @@ function infillFor(cell: CityCell, context: BuildingPlacementContext): Candidate
       if (rectsOverlap(candidate.bounds, around)) occupied.push(candidate);
     }
   }
-  const spacing = 30;
-  for (let x = inner.minX + spacing / 2; x < inner.maxX; x += spacing) {
-    for (let z = inner.minZ + spacing / 2; z < inner.maxZ; z += spacing) {
-      const seed = hashString(`in${cell.id}:${Math.round(x)}:${Math.round(z)}`);
-      if (seed % 100 < 14) continue;
-      const center = { x: x + (((seed >>> 7) % 9) - 4), z: z + (((seed >>> 11) % 9) - 4) };
-      const density = context.density(center);
-      const use = pickInfillUse(density, seed);
-      const dims = buildingDimensions(use, seed, density, true);
+  const insideInner = (polygon: WorldMeters[]) =>
+    polygon.every((point) => point.x >= inner.minX && point.x <= inner.maxX && point.z >= inner.minZ && point.z <= inner.maxZ);
+  const accept = (polygon: WorldMeters[], center: WorldMeters, halfDiagonal: number) => {
+    const bounds = polygonBounds(polygon);
+    if (!insideInner(polygon) || !footprintClear(polygon, center, halfDiagonal, context) || !clearOfRoads(polygon, bounds, pieces)) return undefined;
+    const padded = { minX: bounds.minX - 1.5, maxX: bounds.maxX + 1.5, minZ: bounds.minZ - 1.5, maxZ: bounds.maxZ + 1.5 };
+    if (occupied.some((other) => rectsOverlap(other.bounds, padded) && convexPolygonsOverlap(other.polygon, polygon, 1.5))) return undefined;
+    return bounds;
+  };
+  const roadNameNear = (center: WorldMeters) =>
+    pieces.reduce<{ name: string; distance: number }>(
+      (best, piece) => {
+        const distance = Math.hypot((piece.a.x + piece.b.x) / 2 - center.x, (piece.a.z + piece.b.z) / 2 - center.z);
+        return distance < best.distance ? { name: piece.name, distance } : best;
+      },
+      { name: "ซอยภายใน", distance: Number.POSITIVE_INFINITY },
+    ).name;
+
+  // Back rows: a lower building directly behind each street-front one, like the row houses and
+  // workshops behind Bangkok shophouses.
+  for (const front of [...occupied]) {
+    if (!front.building.facesStreet || front.polygon.length !== 4 || (front.building.floors ?? 0) > 12) continue;
+    const [p0, , p2, p3] = front.polygon;
+    const depthLength = Math.hypot(p3.x - p0.x, p3.z - p0.z) || 1;
+    const nx = (p3.x - p0.x) / depthLength;
+    const nz = (p3.z - p0.z) / depthLength;
+    const seed = hashString(`back:${front.building.id}`);
+    const depth = 10 + (seed % 9);
+    const gap = 1.2 + ((seed >>> 4) % 3);
+    const polygon = [
+      { x: p3.x + nx * gap, z: p3.z + nz * gap },
+      { x: p2.x + nx * gap, z: p2.z + nz * gap },
+      { x: p2.x + nx * (gap + depth), z: p2.z + nz * (gap + depth) },
+      { x: p3.x + nx * (gap + depth), z: p3.z + nz * (gap + depth) },
+    ];
+    const center = polygonCentroid(polygon);
+    const width = Math.hypot(p2.x - p3.x, p2.z - p3.z);
+    if (!accept(polygon, center, Math.hypot(width, depth) / 2)) continue;
+    const density = context.density(center);
+    const use: BuildingUse = density.cbd > 0.5 && seed % 3 === 0 ? "condo" : (seed >>> 6) % 3 === 0 ? "house" : "townhouse";
+    const dims = buildingDimensions(use, seed, density, true);
+    const floors = use === "condo" ? Math.min(dims.floors, 8) : dims.floors;
+    const candidate = makeBuilding(`${front.building.id}|back`, polygon, use, { ...dims, width, depth, floors, heightMeters: floors * 3.3 }, seed, roadNameNear(center), `${(seed % 300) + 1}/${(seed >>> 8) % 60}`, false, context);
+    occupied.push(candidate);
+    result.push(candidate);
+  }
+
+  // Two staggered lattices: the first places a building of the block's mix at each point, falling
+  // back to something small when it doesn't fit; the second fills leftover gaps with small buildings.
+  const spacing = 27;
+  const tryPlace = (x: number, z: number, pass: number) => {
+    const seed = hashString(`in${cell.id}:${pass}:${Math.round(x)}:${Math.round(z)}`);
+    if (seed % 100 < (pass === 0 ? 10 : 35)) return;
+    const center = { x: x + (((seed >>> 7) % 9) - 4), z: z + (((seed >>> 11) % 9) - 4) };
+    const density = context.density(center);
+    const small: BuildingUse = density.cbd > 0.4 || density.oldTown ? "shophouse" : (seed >>> 3) % 2 ? "house" : "townhouse";
+    const picked = pickInfillUse(density, seed);
+    const uses: BuildingUse[] = pass === 0 && picked !== small ? [picked, small] : [small];
+    for (const use of uses) {
+      const useSeed = use === picked ? seed : seed >>> 2;
+      const dims = buildingDimensions(use, useSeed, density, true);
       const hw = dims.width / 2;
       const hd = dims.depth / 2;
-      if (center.x - hw < inner.minX || center.x + hw > inner.maxX || center.z - hd < inner.minZ || center.z + hd > inner.maxZ) continue;
       const polygon = [
         { x: center.x - hw, z: center.z - hd },
         { x: center.x + hw, z: center.z - hd },
         { x: center.x + hw, z: center.z + hd },
         { x: center.x - hw, z: center.z + hd },
       ];
-      const bounds = polygonBounds(polygon);
-      if (!footprintClear(polygon, center, Math.hypot(hw, hd), context) || !clearOfRoads(polygon, bounds, pieces)) continue;
-      const overlaps = occupied.some((other) => rectsOverlap(other.bounds, { minX: bounds.minX - 2, maxX: bounds.maxX + 2, minZ: bounds.minZ - 2, maxZ: bounds.maxZ + 2 }) && convexPolygonsOverlap(other.polygon, polygon, 2));
-      if (overlaps) continue;
-      const nearestRoad = pieces.reduce<{ name: string; distance: number }>(
-        (best, piece) => {
-          const distance = Math.hypot((piece.a.x + piece.b.x) / 2 - center.x, (piece.a.z + piece.b.z) / 2 - center.z);
-          return distance < best.distance ? { name: piece.name, distance } : best;
-        },
-        { name: "ซอยภายใน", distance: Number.POSITIVE_INFINITY },
-      );
-      const candidate = makeBuilding(`${cell.id}|in|${Math.round(x)}:${Math.round(z)}`, polygon, use, dims, seed, nearestRoad.name, `${(seed % 300) + 1}/${(seed >>> 8) % 60}`, false, context);
+      if (!accept(polygon, center, Math.hypot(hw, hd))) continue;
+      const candidate = makeBuilding(`${cell.id}|in${pass}|${Math.round(x)}:${Math.round(z)}`, polygon, use, dims, useSeed, roadNameNear(center), `${(seed % 300) + 1}/${(seed >>> 8) % 60}`, false, context);
       occupied.push(candidate);
       result.push(candidate);
+      return;
     }
+  };
+  for (let x = inner.minX + spacing / 2; x < inner.maxX; x += spacing) {
+    for (let z = inner.minZ + spacing / 2; z < inner.maxZ; z += spacing) tryPlace(x, z, 0);
+  }
+  for (let x = inner.minX + spacing; x < inner.maxX; x += spacing) {
+    for (let z = inner.minZ + spacing; z < inner.maxZ; z += spacing) tryPlace(x, z, 1);
   }
   return remember(infillCache, cell.id, result, 1_500);
 }
