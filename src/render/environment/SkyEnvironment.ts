@@ -28,14 +28,14 @@ export const moodPresets: Record<VisualMood, MoodPreset> = {
     skyHorizon: "#cde9f7",
     skyBottom: "#9fb7a6",
     sunColor: "#fff1d6",
-    sunIntensity: 2.7,
-    sunElevationDeg: 58,
+    sunIntensity: 3.1,
+    sunElevationDeg: 52,
     sunAzimuthDeg: 135,
     hemiSky: "#d7ecff",
-    hemiGround: "#5d6b4c",
-    hemiIntensity: 1.05,
+    hemiGround: "#6b6558",
+    hemiIntensity: 0.78,
     exposure: 1,
-    environmentIntensity: 0.7,
+    environmentIntensity: 0.55,
     windowGlow: 0,
     lampGlow: 0.05,
     headlights: 0,
@@ -53,7 +53,7 @@ export const moodPresets: Record<VisualMood, MoodPreset> = {
     sunAzimuthDeg: 250,
     hemiSky: "#ffd2a1",
     hemiGround: "#4a3a3a",
-    hemiIntensity: 0.85,
+    hemiIntensity: 0.7,
     exposure: 1.05,
     environmentIntensity: 0.6,
     windowGlow: 0.35,
@@ -76,7 +76,7 @@ export const moodPresets: Record<VisualMood, MoodPreset> = {
     hemiIntensity: 0.32,
     exposure: 0.95,
     environmentIntensity: 0.1,
-    windowGlow: 1.1,
+    windowGlow: 0.9,
     lampGlow: 3,
     headlights: 1,
     stars: true,
@@ -117,6 +117,48 @@ const skyFragmentShader = `
     #include <colorspace_fragment>
   }
 `;
+
+// A sky dome in the mood's colours for façade reflections, so glass towers mirror the sky and the
+// street below instead of the studio room the rest of the scene is lit with.
+export function createSkyReflectionScene(preset: MoodPreset): THREE.Scene {
+  const scene = new THREE.Scene();
+  const geometry = new THREE.SphereGeometry(50, 32, 16);
+  const top = new THREE.Color(preset.skyTop);
+  const horizon = new THREE.Color(preset.skyHorizon);
+  const street = new THREE.Color(preset.skyBottom).lerp(new THREE.Color(preset.hemiGround), 0.6);
+  const position = geometry.getAttribute("position");
+  const colors = new Float32Array(position.count * 3);
+  const color = new THREE.Color();
+  for (let i = 0; i < position.count; i += 1) {
+    const y = position.getY(i) / 50;
+    if (y >= 0) color.copy(horizon).lerp(top, Math.pow(y, 0.55));
+    else color.copy(horizon).lerp(street, Math.min(1, -y * 5));
+    color.toArray(colors, i * 3);
+  }
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  scene.add(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
+  // A ring of skyline blocks, so glass shows neighbouring towers low down and sky above them
+  // (and the reflection shifts as the car moves) instead of one flat sheen.
+  const skyline = street.clone().lerp(horizon, 0.45);
+  const block = new THREE.BoxGeometry(1, 1, 1);
+  let seed = 7;
+  const random = () => {
+    seed = (seed * 16807) % 2147483647;
+    return seed / 2147483647;
+  };
+  for (let i = 0; i < 40; i += 1) {
+    const angle = (i / 40) * Math.PI * 2 + random() * 0.1;
+    const height = 3 + random() * 13;
+    const width = 3 + random() * 5;
+    const material = new THREE.MeshBasicMaterial({ color: skyline.clone().multiplyScalar(0.75 + random() * 0.5) });
+    const mesh = new THREE.Mesh(block, material);
+    mesh.scale.set(width, height * 2, 2);
+    mesh.position.set(Math.cos(angle) * 38, 0, Math.sin(angle) * 38);
+    mesh.lookAt(0, 0, 0);
+    scene.add(mesh);
+  }
+  return scene;
+}
 
 export class SkyEnvironment {
   readonly hemi = new THREE.HemisphereLight("#d7ecff", "#5d6b4c", 1);

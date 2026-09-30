@@ -1,5 +1,5 @@
 // Cells of the building façade texture atlas (4 columns x 2 rows). Each cell tiles seamlessly and
-// covers 28 world units across by four 6.4-unit floors.
+// covers 28 world units across by four 6.6-unit floors.
 export const FACADE_COLUMNS = 4;
 export const FACADE_ROWS = 2;
 

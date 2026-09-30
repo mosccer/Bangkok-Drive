@@ -10,6 +10,7 @@ export interface WorldMaterials {
   asphalt: THREE.Material;
   bridge: THREE.Material;
   sidewalk: THREE.Material;
+  paving: THREE.Material;
   markings: THREE.Material;
   walls: THREE.Material;
   roofs: THREE.Material;
@@ -42,6 +43,7 @@ interface LocalSegment {
 }
 
 interface BuildingBuffers {
+  paving: GeometryBuffer;
   walls: GeometryBuffer;
   roofs: GeometryBuffer;
   signs: GeometryBuffer;
@@ -55,11 +57,15 @@ interface BuildingBuffers {
 const ROAD_Y = 0.06;
 const BRIDGE_Y = 0.08;
 const SIDEWALK_Y = 0.16;
+// Building plots sit between the road (so they never cover it) and the sidewalk (which hides their street edge).
+const PLOT_Y = 0.11;
 const MARKING_Y = 0.075;
 const SIDEWALK_WIDTH = 3.2;
 const ROAD_UV_SCALE = 1 / 12;
+const FLOOR = 3.3 * MAP_SCALE;
 const FACADE_U = 1 / 28;
-const FACADE_V = 1 / 25.6;
+// One atlas cell spans four floors, so painted floor lines meet the ledges and balcony slabs.
+const FACADE_V = 1 / (4 * FLOOR);
 
 type PaletteKey = MapBuildingKind | BuildingUse;
 
@@ -120,7 +126,7 @@ export function buildTileGroup(tile: RoadTile, context: TileBuildContext): THREE
   }
 }
 
-const BUILDINGS_PER_STEP = 70;
+const BUILDINGS_PER_STEP = 50;
 
 // The same build split into resumable steps (roads, then buildings in batches, then street
 // furniture) so the renderer can spread one tile over several frames.
@@ -223,6 +229,7 @@ export function* tileGroupSteps(tile: RoadTile, context: TileBuildContext): Gene
   yield;
 
   const buildings: BuildingBuffers = {
+    paving: new GeometryBuffer(),
     walls: new GeometryBuffer(true, true),
     roofs: new GeometryBuffer(true),
     signs: new GeometryBuffer(true),
@@ -237,6 +244,7 @@ export function* tileGroupSteps(tile: RoadTile, context: TileBuildContext): Gene
     addBuilding(buildings, tileBuildings[index], origin, detail);
     if (index % BUILDINGS_PER_STEP === BUILDINGS_PER_STEP - 1) yield;
   }
+  addMesh(buildings.paving, context.materials.paving, true, false);
   const wallMesh = addMesh(buildings.walls, context.materials.walls, true, detail !== "low");
   const roofMesh = addMesh(buildings.roofs, context.materials.roofs, true, detail === "high");
   addMesh(buildings.signs, context.materials.signs, false, false);
@@ -359,7 +367,6 @@ const spireGeometry = new THREE.ConeGeometry(1, 1, 8).translate(0, 0.5, 0);
 for (const geometry of [rooftopTankGeometry, rooftopBoxGeometry, antennaGeometry, spireGeometry]) {
   geometry.userData.shared = true;
 }
-const FLOOR = 3.3 * MAP_SCALE;
 const AWNING_Y = 2.9 * MAP_SCALE;
 const glassColor = new THREE.Color("#23405c");
 const crossRed = new THREE.Color("#dc2626");
@@ -561,37 +568,150 @@ function frontEdge(points: WorldMeters[]): { p: WorldMeters; q: WorldMeters; nx:
   return { p, q, nx, nz, length, dx: (q.x - p.x) / length, dz: (q.z - p.z) / length };
 }
 
-// A flat panel standing just in front of the street-facing wall.
+// A sign box mounted on the street-facing wall (front face plus its edges).
 function addFacadePanel(buffer: GeometryBuffer, points: WorldMeters[], from: number, to: number, y0: number, y1: number, color: THREE.Color, offset = 0.14): void {
   const { p, nx, nz, length, dx, dz } = frontEdge(points);
-  const at = (t: number, y: number): Vec3 => ({ x: p.x + dx * length * t + nx * offset, y, z: p.z + dz * length * t + nz * offset });
-  buffer.addQuad(at(from, y0), at(to, y0), at(to, y1), at(from, y1), { x: nx, y: 0, z: nz }, [
-    [0, 0],
-    [1, 0],
-    [1, 1],
-    [0, 1],
-  ], color);
+  const a = { x: p.x + dx * length * from, z: p.z + dz * length * from };
+  const b = { x: p.x + dx * length * to, z: p.z + dz * length * to };
+  addSlab(buffer, a, b, nx, nz, y0, y1, offset + 0.2, color, true);
 }
 
 // Vertical sign sticking out from the facade, readable from along the street.
 function addBladeSign(buffer: GeometryBuffer, points: WorldMeters[], t: number, y0: number, y1: number, color: THREE.Color): void {
   const { p, nx, nz, length, dx, dz } = frontEdge(points);
   const base = { x: p.x + dx * length * t, z: p.z + dz * length * t };
-  const at = (out: number, y: number): Vec3 => ({ x: base.x + nx * out, y, z: base.z + nz * out });
-  buffer.addQuad(at(0.3, y0), at(2.1, y0), at(2.1, y1), at(0.3, y1), { x: dx, y: 0, z: dz }, [
-    [0, 0],
-    [1, 0],
-    [1, 1],
-    [0, 1],
-  ], color);
+  // A thin box: two faces 0.3 apart along the street plus its outer edge, top and bottom.
+  const inner = { x: base.x + nx * 0.3 - dx * 0.15, z: base.z + nz * 0.3 - dz * 0.15 };
+  const outer = { x: base.x + nx * 2.1 - dx * 0.15, z: base.z + nz * 2.1 - dz * 0.15 };
+  addSlab(buffer, inner, outer, dx, dz, y0, y1, 0.3, color, true);
   const band = color.clone().lerp(white, 0.7);
   const mid = (y0 + y1) / 2;
-  buffer.addQuad(at(0.5, mid - 0.4), at(1.9, mid - 0.4), at(1.9, mid + 0.4), at(0.5, mid + 0.4), { x: dx, y: 0, z: dz }, [
-    [0, 0],
-    [1, 0],
-    [1, 1],
+  for (const side of [-0.17, 0.47]) {
+    const at = (out: number, y: number): Vec3 => ({ x: base.x + nx * out + dx * side, y, z: base.z + nz * out + dz * side });
+    buffer.addQuad(at(0.5, mid - 0.45), at(1.9, mid - 0.45), at(1.9, mid + 0.45), at(0.5, mid + 0.45), { x: dx * Math.sign(side), y: 0, z: dz * Math.sign(side) }, FLAT_UV, band);
+  }
+}
+
+const DOWN: Vec3 = { x: 0, y: -1, z: 0 };
+const FLAT_UV: [[number, number], [number, number], [number, number], [number, number]] = [
+  [0, 0],
+  [1, 0],
+  [1, 1],
+  [0, 1],
+];
+
+// A box standing out from a wall: runs from `a` to `b` along the wall, sticks out `depth` along the
+// outward normal (nx, nz) and spans y0..y1. Used for ledges, cornices, balconies and sign boxes.
+function addSlab(buffer: GeometryBuffer, a: WorldMeters, b: WorldMeters, nx: number, nz: number, y0: number, y1: number, depth: number, color: THREE.Color, ends = true): void {
+  const ax = a.x + nx * depth;
+  const az = a.z + nz * depth;
+  const bx = b.x + nx * depth;
+  const bz = b.z + nz * depth;
+  const top = color.clone().lerp(white, 0.12);
+  const under = color.clone().multiplyScalar(0.62);
+  buffer.addQuad({ x: ax, y: y0, z: az }, { x: bx, y: y0, z: bz }, { x: bx, y: y1, z: bz }, { x: ax, y: y1, z: az }, { x: nx, y: 0, z: nz }, FLAT_UV, color);
+  buffer.addQuad({ x: a.x, y: y1, z: a.z }, { x: b.x, y: y1, z: b.z }, { x: bx, y: y1, z: bz }, { x: ax, y: y1, z: az }, UP, FLAT_UV, top);
+  buffer.addQuad({ x: a.x, y: y0, z: a.z }, { x: b.x, y: y0, z: b.z }, { x: bx, y: y0, z: bz }, { x: ax, y: y0, z: az }, DOWN, FLAT_UV, under);
+  if (!ends) return;
+  const length = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+  const ux = (b.x - a.x) / length;
+  const uz = (b.z - a.z) / length;
+  buffer.addQuad({ x: a.x, y: y0, z: a.z }, { x: ax, y: y0, z: az }, { x: ax, y: y1, z: az }, { x: a.x, y: y1, z: a.z }, { x: -ux, y: 0, z: -uz }, FLAT_UV, under);
+  buffer.addQuad({ x: b.x, y: y0, z: b.z }, { x: bx, y: y0, z: bz }, { x: bx, y: y1, z: bz }, { x: b.x, y: y1, z: b.z }, { x: ux, y: 0, z: uz }, FLAT_UV, under);
+}
+
+// Outward normal of the edge p -> q of a footprint.
+function edgeNormal(points: WorldMeters[], p: WorldMeters, q: WorldMeters): { nx: number; nz: number } {
+  const center = centroidOf(points);
+  const length = Math.hypot(q.x - p.x, q.z - p.z) || 1;
+  let nx = -(q.z - p.z) / length;
+  let nz = (q.x - p.x) / length;
+  if (nx * ((p.x + q.x) / 2 - center.x) + nz * ((p.z + q.z) / 2 - center.z) < 0) {
+    nx = -nx;
+    nz = -nz;
+  }
+  return { nx, nz };
+}
+
+// Floor ledges on the street face and a deeper cornice under the roof line.
+function addLedges(buffer: GeometryBuffer, points: WorldMeters[], floors: number, height: number, color: THREE.Color): void {
+  const { p, q, nx, nz, dx, dz } = frontEdge(points);
+  const a = { x: p.x - dx * 0.25, z: p.z - dz * 0.25 };
+  const b = { x: q.x + dx * 0.25, z: q.z + dz * 0.25 };
+  const ledge = color.clone().multiplyScalar(0.94);
+  for (let floor = 1; floor < floors; floor += 1) {
+    const y = floor * FLOOR;
+    if (y > height - 1.5) break;
+    addSlab(buffer, a, b, nx, nz, y - 0.28, y + 0.12, 0.42, ledge, false);
+  }
+  addSlab(buffer, a, b, nx, nz, height - 0.7, height - 0.1, 0.75, ledge, true);
+}
+
+// Balcony slabs on the long faces of a condo or hotel tower, one per floor up to `maxFloors`.
+function addBalconies(buffer: GeometryBuffer, ring: WorldMeters[], fromY: number, toY: number, color: THREE.Color, maxFloors: number): void {
+  const slab = color.clone().lerp(white, 0.35);
+  for (const [i, j] of [
     [0, 1],
-  ], band);
+    [2, 3],
+  ]) {
+    const p = ring[i];
+    const q = ring[j];
+    const length = Math.hypot(q.x - p.x, q.z - p.z);
+    if (length < 8) continue;
+    const { nx, nz } = edgeNormal(ring, p, q);
+    const ux = (q.x - p.x) / length;
+    const uz = (q.z - p.z) / length;
+    const a = { x: p.x + ux * length * 0.08, z: p.z + uz * length * 0.08 };
+    const b = { x: q.x - ux * length * 0.08, z: q.z - uz * length * 0.08 };
+    // Real slabs on the lower floors, where the street sees their depth; the façade texture carries
+    // the balconies further up.
+    const first = Math.ceil(fromY / FLOOR) * FLOOR + FLOOR;
+    const levels = Math.min(maxFloors, Math.max(0, Math.floor((toY - 1 - first) / FLOOR) + 1));
+    for (let level = 0; level < levels; level += 1) {
+      const y = first + level * FLOOR;
+      addSlab(buffer, a, b, nx, nz, y - 0.35, y, 1.25, slab, false);
+    }
+  }
+}
+
+// Shophouse with the classic five-foot way: the ground floor is set back under the upper floors,
+// with a soffit overhead and pillars at the front corners.
+function addArcadeWalls(buffers: BuildingBuffers, points: WorldMeters[], height: number, bottom: THREE.Color, top: THREE.Color, seed: number, styles: { ground: FacadeStyleId; upper: FacadeStyleId }): void {
+  const [p0, p1, p2, p3] = points;
+  const depth = Math.hypot(p3.x - p0.x, p3.z - p0.z) || 1;
+  const ix = (p3.x - p0.x) / depth;
+  const iz = (p3.z - p0.z) / depth;
+  const recess = Math.min(1.6, depth * 0.12);
+  const ground = [
+    { x: p0.x + ix * recess, z: p0.z + iz * recess },
+    { x: p1.x + ix * recess, z: p1.z + iz * recess },
+    p2,
+    p3,
+  ];
+  const split = bottom.clone().lerp(top, FLOOR / height);
+  addWalls(buffers.walls, ground, 0, FLOOR, bottom, split, seed, styles.ground);
+  addWalls(buffers.walls, points, FLOOR, height, split, top, seed, styles.upper);
+  buffers.roofs.addQuad(
+    { x: p0.x, y: FLOOR, z: p0.z },
+    { x: p1.x, y: FLOOR, z: p1.z },
+    { x: ground[1].x, y: FLOOR, z: ground[1].z },
+    { x: ground[0].x, y: FLOOR, z: ground[0].z },
+    DOWN,
+    FLAT_UV,
+    bottom.clone().multiplyScalar(0.55),
+  );
+  const width = Math.hypot(p1.x - p0.x, p1.z - p0.z) || 1;
+  const ux = (p1.x - p0.x) / width;
+  const uz = (p1.z - p0.z) / width;
+  const pillar = top.clone().multiplyScalar(0.9);
+  for (const [corner, sign] of [
+    [p0, 1],
+    [p1, -1],
+  ] as const) {
+    const a = { x: corner.x + ux * sign * 0.05, z: corner.z + uz * sign * 0.05 };
+    const b = { x: corner.x + ux * sign * 0.65, z: corner.z + uz * sign * 0.65 };
+    addSlab(buffers.roofs, { x: a.x + ix * 0.6, z: a.z + iz * 0.6 }, { x: b.x + ix * 0.6, z: b.z + iz * 0.6 }, -ix, -iz, 0, FLOOR, 0.6, pillar, true);
+  }
 }
 
 function addAwning(buffer: GeometryBuffer, points: WorldMeters[], color: THREE.Color, depth: number): void {
@@ -605,12 +725,20 @@ function addAwning(buffer: GeometryBuffer, points: WorldMeters[], color: THREE.C
     { x: b.x + nx * depth, y: AWNING_Y - 0.9, z: b.z + nz * depth },
     { x: a.x + nx * depth, y: AWNING_Y - 0.9, z: a.z + nz * depth },
   ];
-  buffer.addQuad(quad[0], quad[1], quad[2], quad[3], upwardNormal(quad[0], quad[1], quad[2]), [
-    [0, 0],
-    [1, 0],
-    [1, 1],
-    [0, 1],
-  ], color);
+  const normal = upwardNormal(quad[0], quad[1], quad[2]);
+  buffer.addQuad(quad[0], quad[1], quad[2], quad[3], normal, FLAT_UV, color);
+  // Underside (seen from the pavement) and a hanging valance along the front edge.
+  buffer.addQuad(quad[0], quad[1], quad[2], quad[3], { x: -normal.x, y: -normal.y, z: -normal.z }, FLAT_UV, color.clone().multiplyScalar(0.6));
+  const drop = AWNING_Y - 1.55;
+  const valance: [Vec3, Vec3, Vec3, Vec3] = [
+    { x: quad[3].x, y: drop, z: quad[3].z },
+    { x: quad[2].x, y: drop, z: quad[2].z },
+    quad[2],
+    quad[3],
+  ];
+  const trim = color.clone().lerp(white, 0.45);
+  buffer.addQuad(valance[0], valance[1], valance[2], valance[3], { x: nx, y: 0, z: nz }, FLAT_UV, trim);
+  buffer.addQuad(valance[0], valance[1], valance[2], valance[3], { x: -nx, y: 0, z: -nz }, FLAT_UV, trim.clone().multiplyScalar(0.7));
 }
 
 // Advertising hoarding on a low roof, facing the street, with its two legs.
@@ -704,7 +832,18 @@ function addStyledWalls(buffers: BuildingBuffers, points: WorldMeters[], y0: num
   }
 }
 
-function addTower(buffers: BuildingBuffers, building: MapBuilding, points: WorldMeters[], height: number, seed: number, wallColor: THREE.Color, baseColor: THREE.Color, roofColor: THREE.Color, styles: { ground: FacadeStyleId; upper: FacadeStyleId }): { roofTop: number; top: WorldMeters[] } {
+function addTower(
+  buffers: BuildingBuffers,
+  building: MapBuilding,
+  points: WorldMeters[],
+  height: number,
+  seed: number,
+  wallColor: THREE.Color,
+  baseColor: THREE.Color,
+  roofColor: THREE.Color,
+  styles: { ground: FacadeStyleId; upper: FacadeStyleId },
+  detail: RenderQualityProfile["quality"],
+): { roofTop: number; top: WorldMeters[] } {
   const use = building.use;
   const floors = building.floors ?? 10;
   const variant = (seed >>> 7) % 3;
@@ -730,6 +869,10 @@ function addTower(buffers: BuildingBuffers, building: MapBuilding, points: World
   }
   addCap(buffers.roofs, ring, height, roofColor);
   addParapet(buffers.roofs, ring, height, 1.2, wallColor.clone().multiplyScalar(0.85));
+  if (detail !== "low" && ring.length === 4 && (use === "condo" || (use === "hotel" && seed % 2 === 0)) && styles.upper !== FacadeStyle.glass) {
+    addBalconies(buffers.roofs, ring, Math.max(base, FLOOR), height, wallColor, detail === "high" ? 24 : 10);
+  }
+  if (base > 0 && points.length === 4 && building.facesStreet) addLedges(buffers.roofs, points, Math.round(base / FLOOR), base, wallColor);
   return { roofTop: height, top: ring };
 }
 
@@ -785,9 +928,32 @@ function addDiscCap(buffer: GeometryBuffer, center: WorldMeters, radius: number,
   }
 }
 
+// Paved plot around a generated footprint, reaching under the sidewalk on the street side so shops
+// open straight onto the pavement instead of a strip of bare earth. Pavers are mapped in world space,
+// so neighbouring plots that overlap draw identically.
+function addPlot(paving: GeometryBuffer, points: WorldMeters[], origin: WorldMeters, facesStreet: boolean): void {
+  const [p0, p1, p2, p3] = points;
+  const width = Math.hypot(p1.x - p0.x, p1.z - p0.z) || 1;
+  const depth = Math.hypot(p3.x - p0.x, p3.z - p0.z) || 1;
+  const ux = (p1.x - p0.x) / width;
+  const uz = (p1.z - p0.z) / width;
+  const ix = (p3.x - p0.x) / depth;
+  const iz = (p3.z - p0.z) / depth;
+  // Only rectangles (every generated footprint); an imported outline could poke out of its plot.
+  if (Math.abs(ux * ix + uz * iz) > 0.05 || Math.hypot(p1.x + p3.x - p0.x - p2.x, p1.z + p3.z - p0.z - p2.z) > 0.5) return;
+  const side = 1;
+  const front = facesStreet ? 1.6 : 1;
+  const back = 1;
+  const corner = (base: WorldMeters, along: number, inward: number): Vec3 => ({ x: base.x + ux * along + ix * inward, y: PLOT_Y, z: base.z + uz * along + iz * inward });
+  const quad = [corner(p0, -side, -front), corner(p0, width + side, -front), corner(p0, width + side, depth + back), corner(p0, -side, depth + back)];
+  const uv = (point: Vec3): [number, number] => [(point.x + origin.x) / 6, (point.z + origin.z) / 6];
+  paving.addQuad(quad[0], quad[1], quad[2], quad[3], UP, [uv(quad[0]), uv(quad[1]), uv(quad[2]), uv(quad[3])]);
+}
+
 function addBuilding(buffers: BuildingBuffers, building: MapBuilding, origin: WorldMeters, detail: RenderQualityProfile["quality"]): void {
   const points = building.footprint.map((point) => ({ x: point.x - origin.x, z: point.z - origin.z }));
   if (points.length < 3) return;
+  if (points.length === 4) addPlot(buffers.paving, points, origin, Boolean(building.facesStreet));
   const seed = hashString(building.id);
   const key: PaletteKey = building.use ?? building.kind;
   const wallColor = new THREE.Color(pick(wallPalettes[key], seed));
@@ -805,7 +971,7 @@ function addBuilding(buffers: BuildingBuffers, building: MapBuilding, origin: Wo
   let flatRoof = true;
 
   if ((use === "condo" || use === "office" || use === "hotel") && floors >= 8) {
-    const tower = addTower(buffers, building, points, height, seed, wallColor, baseColor, roofColor, styles);
+    const tower = addTower(buffers, building, points, height, seed, wallColor, baseColor, roofColor, styles, detail);
     roofRing = tower.top;
     roofTop = addRoofTopFeature(buffers, building, roofRing, tower.roofTop, seed, wallColor, roofColor);
     flatRoof = false;
@@ -832,10 +998,15 @@ function addBuilding(buffers: BuildingBuffers, building: MapBuilding, origin: Wo
     for (const end of [lowEnd0, lowEnd1]) prop(buffers.spires, end, eave + rise - 0.2, 0, new THREE.Vector3(0.3, 2.6, 0.3));
     prop(buffers.spires, center, roofTop - 1, 0, new THREE.Vector3(1.4, height * 0.55, 1.4));
     flatRoof = false;
+  } else if (quad && building.facesStreet && use === "shophouse" && floors >= 2 && detail !== "low") {
+    addArcadeWalls(buffers, points, height, baseColor, wallColor, seed, styles);
+    addCap(buffers.roofs, points, height, roofColor);
   } else {
     addStyledWalls(buffers, points, 0, height, baseColor, wallColor, seed, styles);
     addCap(buffers.roofs, points, height, roofColor);
   }
+  const ledgeUse = use === "shophouse" || use === "townhouse" || use === "government" || use === "school" || use === "hospital" || use === "convenience" || use === "market";
+  if (quad && building.facesStreet && flatRoof && ledgeUse && detail !== "low" && floors <= 12) addLedges(buffers.roofs, points, floors, height, wallColor);
   if (flatRoof && detail !== "low" && floors >= 2 && use !== "house") addParapet(buffers.roofs, points, height, use === "mall" || use === "government" ? 1.4 : 0.9, wallColor.clone().multiplyScalar(0.86));
 
   if (quad && building.facesStreet) {

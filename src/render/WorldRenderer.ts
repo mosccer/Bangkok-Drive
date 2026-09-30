@@ -35,12 +35,13 @@ import {
   createGrassMaterial,
   createGroundMaterial,
   createMarkingMaterial,
+  createPavingMaterial,
   createSidewalkMaterial,
   createWaterMaterial,
 } from "./materials/proceduralMaterials";
 import { createVehicleMesh } from "./objects/vehicleMesh";
 import { createTrafficMesh } from "./objects/trafficMeshes";
-import { SkyEnvironment, type MoodPreset } from "./environment/SkyEnvironment";
+import { createSkyReflectionScene, SkyEnvironment, type MoodPreset } from "./environment/SkyEnvironment";
 import { areaBounds, buildAreaObject, type AreaMaterials } from "./world/areaBuilder";
 import { disposeGroup, tileGroupSteps, type WorldMaterials } from "./world/tileBuilder";
 import { createSpeedEffectState, createVehicleVisualState, defaultArcadeVisualSettings } from "./arcadeVisuals";
@@ -191,6 +192,8 @@ export class WorldRenderer {
   private readonly waterMaterial: THREE.MeshStandardMaterial;
   private readonly groundMaterial: THREE.MeshStandardMaterial;
   private readonly facade: ReturnType<typeof createFacadeMaterials>;
+  private skyReflection?: THREE.WebGLRenderTarget;
+  private skyReflectionMood?: MoodPreset;
   private readonly lampHeadMaterial = new THREE.MeshStandardMaterial({ color: "#fff7dd", emissive: "#ffd48a", emissiveIntensity: 0.05, roughness: 0.4 });
   private waypointKey = "";
   private waypointRing?: THREE.Mesh;
@@ -251,6 +254,7 @@ export class WorldRenderer {
       asphalt: createAsphaltMaterial(this.qualityProfile.useHighDetailMaterials),
       bridge: createBridgeMaterial(),
       sidewalk: createSidewalkMaterial(),
+      paving: createPavingMaterial(),
       markings: createMarkingMaterial(),
       walls: this.facade.walls,
       roofs: this.facade.roofs,
@@ -301,6 +305,7 @@ export class WorldRenderer {
     window.removeEventListener("resize", this.handleResize);
     this.clearSkidMarks();
     this.composer?.dispose();
+    this.skyReflection?.dispose();
     this.renderer.dispose();
   }
 
@@ -1014,11 +1019,27 @@ export class WorldRenderer {
     }
   }
 
+  // Glass and glossy façade details reflect a dome in the current sky colours (rebuilt per mood).
+  private updateSkyReflection(preset: MoodPreset): void {
+    if (this.skyReflectionMood === preset) return;
+    this.skyReflectionMood = preset;
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    const scene = createSkyReflectionScene(preset);
+    const target = pmrem.fromScene(scene, 0.02);
+    pmrem.dispose();
+    disposeObject(scene);
+    this.skyReflection?.dispose();
+    this.skyReflection = target;
+    this.facade.walls.envMap = target.texture;
+    this.facade.walls.envMapIntensity = 0.2 + preset.environmentIntensity;
+  }
+
   private applyVisualMood(): void {
     const preset = this.environment.applyMood(this.arcadeVisualSettings.visualMood, this.qualityProfile.drawDistance);
     this.moodPreset = preset;
     this.renderer.toneMappingExposure = this.qualityProfile.toneMappingExposure * preset.exposure;
     this.facade.walls.emissiveIntensity = preset.windowGlow;
+    this.updateSkyReflection(preset);
     this.lampHeadMaterial.emissiveIntensity = preset.lampGlow;
     (this.worldMaterials.markings as THREE.MeshStandardMaterial).emissiveIntensity = preset.stars ? 0.25 : 0.05;
     if (this.bloomPass) this.bloomPass.strength = preset.bloomStrength;

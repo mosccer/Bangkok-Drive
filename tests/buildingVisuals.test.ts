@@ -17,6 +17,7 @@ function materials(): WorldMaterials {
     asphalt: named("asphalt"),
     bridge: named("bridge"),
     sidewalk: named("sidewalk"),
+    paving: named("paving"),
     markings: named("markings"),
     walls: named("walls"),
     roofs: named("roofs"),
